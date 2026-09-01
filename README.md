@@ -6,6 +6,8 @@
 
 从「每日 AI 决策报告」到「实盘持仓管理」，一个工作台全部搞定。
 
+> 📌 本项目基于 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis)（MIT License）二次开发。在原项目强大的 **AI 智能分析** 能力之上，进一步深度定制了 **同花顺投资账本持仓同步、实盘持仓管理、分享卡片、告警通知** 等实盘管理功能，感谢原作者的出色工作。
+
 </div>
 
 ---

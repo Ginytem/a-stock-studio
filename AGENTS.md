@@ -289,3 +289,53 @@ CI 通过只能说明自动检查通过，不能替代人工语义收敛，也�
 - 自动 tag 默认不触发，只有 commit title 包含 `#patch`、`#minor`、`#major` 才会触发版本号更新。
 - 手动打 tag 必须使用 annotated tag。
 - 用户可见变更优先通过 PR 合入，并补齐 label 与验证说明。
+
+## 10. 本项目定制与本地运维备忘（用户魔改版）
+
+> 本节记录本仓库在原作者版本基础上的**二次开发状态与本地运维要点**，供 AI 协作/后续维护快速恢复上下文。敏感凭据（API Key、登录密码、Cookie、Token）一律不写入本文件，见本地 `.env` 与用户。
+
+### 10.1 项目现状与定位
+
+- 本仓库为 `daily_stock_analysis`（MIT）的**深度定制版**，对外名称为 **A-Stock Studio**，GitHub 公仓：`https://github.com/WangJingnian/a-stock-studio`
+- 在原版 AI 分析能力之上，新增：同花顺投资账本同步、实盘持仓管理、分享卡片、CCI 指标、告警通知、资产曲线自愈等。
+- README 已重写为五大模块介绍，并含「更新记录」小节；历史提交见 git log。
+
+### 10.2 服务启动 / 自启 / 访问
+
+- Web UI 启动：`python main.py --webui-only`，默认监听 `0.0.0.0:8000`；登录密码由用户设定（本地可见）。
+- 开机自启三件套（均已配置）：
+  - 计划任务 `\DSAWebUI`（Ready 状态）
+  - 启动文件夹 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\SEA_AutoStart.vbs`
+  - 根目录 `start_sea.bat`（先 curl 探活 `127.0.0.1:8000/api/health`，通则退出，否则启动）
+- 局域网访问：手机/其他设备用 `http://<本机局域网IP>:8000` 访问；电脑锁屏/合盖需配合系统电源计划防待机。
+
+### 10.3 数据源与同步机制
+
+- **持仓权威数据**：同花顺投资账本（`tzzb.10jqka.com.cn`），账户名 **百福具臻**（DEFAULT_ACCOUNT_NAME）。
+  - 扫码登录态存本地 `data/ths_cookies.json`；登录失效需重新扫码。
+  - 同步流程见 `src/services/ths_sync/ths_sync_service.py`：汇总持仓同步、现金校准、交易流水导入、资产曲线导入。
+  - 交易流水采用 **7 个交易日窗口覆盖**（增量，不重建历史，防数据丢失）。
+- **导出文件同步（方案B）**：用户每天收盘后从账本「汇总持仓 → 数据导出」下载 `汇总持仓.xlsx` 到 `E:\下载\A-ORDER`，服务每 10 分钟扫描，**指纹判重**，未变化不重复同步。
+- **今日盈亏口径**（用户锁定）：
+  - 盘中：腾讯实时行情 `(现价−昨收)×数量`
+  - 盘后/非交易时段：优先用账本导出快照（`data/ths_export_snapshot.json`），否则腾讯行情
+  - 现金：账本接口值（当前 1685）
+- **资产曲线自愈**：`api/app.py` 中 `_backfill_asset_curve_from_ths`（服务启动 + 每日收盘后自动从账本补齐缺失的日快照），日志关键字 `[AssetCurveBackfill]`。
+- 用户已接受：深市国债逆回购交易记录缺失（沪市才有，影响极小，漏就漏）。
+
+### 10.4 GitHub 推送要点
+
+- 可用完整版 git：`C:\Users\admin\PortableGit\cmd\git.exe`（**勿用** `C:\Program Files\Git`，其为残缺版，push 会静默失败）
+- gh CLI：`C:\Program Files\GitHub CLI\gh.exe`（已授权，含 repo/workflow scope）
+- `origin` remote **不含 token**，普通 push 会认证失败；推送需用 token 内联 URL：
+  ```powershell
+  & $git -C <root> push "https://oauth2:$(& $gh auth token)@github.com/WangJingnian/a-stock-studio.git" "HEAD:main"
+  ```
+- `.gitignore` 已排除：`ths_sync/`（含同花顺登录态）、`data/`、`.env`、调试残留脚本（`_ths_*.py`、`_verify_export.py`、`_patch*.py`、`startup_debug.log`、`start_sea.bat` 等）。
+
+### 10.5 用户协作偏好（重要）
+
+- 答复**简洁、直接、不墨迹**；用户多次对冗长解释与反复试探表示不满。
+- 账本已提供的现成数据**不要自行重算**，直接引用/校验。
+- 盘后以用户手动导出的账本文件为权威口径。
+- 改动前先讨论确认，用户说"先不要改/先探讨"时只讨论不动代码；确认后再落地。

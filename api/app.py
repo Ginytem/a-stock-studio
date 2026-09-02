@@ -292,6 +292,8 @@ async def _portfolio_close_snapshot_loop_runner(app: FastAPI) -> None:
                             logger.exception("close snapshot failed for account %s", acc.get("id"))
                     if generated:
                         logger.info("[PortfolioCloseSnapshot] 已生成 %d 个账户的收盘快照 (%s)", generated, today)
+                    # 资产曲线自愈：收盘后用账本资产曲线补齐缺失/待更新的日快照点
+                    await run_in_threadpool(_backfill_asset_curve_from_ths)
                     last_generated_date = today
         except Exception:  # noqa: BLE001 - 后台任务永不崩溃
             pass
@@ -299,6 +301,43 @@ async def _portfolio_close_snapshot_loop_runner(app: FastAPI) -> None:
             await asyncio.sleep(300)
         except asyncio.CancelledError:
             break
+
+
+def _backfill_asset_curve_from_ths() -> int:
+    """从同花顺账本拉取资产曲线，补齐/更新本地日快照（幂等，缺哪补哪）。
+
+    - 数据源：账本 /pc/asset/v1/asset_trend（约近 24 个交易日，含当日）；
+    - 场景：服务启动、每日收盘快照生成后自动调用，保证资产曲线交易日连续；
+    - 未登录账本或拉取失败时静默跳过，不影响主流程。
+    """
+    try:
+        from src.services.ths_sync.ths_sync_service import (
+            DEFAULT_ACCOUNT_NAME,
+            ThsSyncService,
+        )
+
+        svc = ThsSyncService()
+        if not svc.client.is_logged_in():
+            logger.info("[AssetCurveBackfill] 同花顺账本未登录，跳过资产曲线补齐")
+            return 0
+        account = svc._find_or_create_account(DEFAULT_ACCOUNT_NAME)
+        points = svc.fetch_asset_trend_all()
+        if not points:
+            return 0
+        written = svc._import_asset_trend(account["id"], points)
+        logger.info("[AssetCurveBackfill] 已从账本补齐 %d 个资产曲线快照点", written)
+        return written
+    except Exception:  # noqa: BLE001 - 自愈任务失败不影响主流程
+        logger.exception("[AssetCurveBackfill] 资产曲线补齐失败")
+        return 0
+
+
+async def _startup_asset_curve_backfill_runner() -> None:
+    """服务启动后延迟执行一次账本资产曲线补齐（不阻塞启动）。"""
+    import asyncio
+
+    await asyncio.sleep(5)
+    await run_in_threadpool(_backfill_asset_curve_from_ths)
 
 
 @asynccontextmanager
@@ -370,6 +409,10 @@ async def app_lifespan(app: FastAPI):
     # 保证历史资产曲线每天都有完整的收盘数据（无需用户手动打开页面触发）。
     portfolio_close_snapshot_task = asyncio.create_task(_portfolio_close_snapshot_loop_runner(app))
     app.state.portfolio_close_snapshot_task = portfolio_close_snapshot_task
+    # 资产曲线自愈：启动后补齐账本资产曲线缺失的交易日快照（服务重启 / 长时间停机后
+    # 自动补录，不阻塞启动）。
+    asset_curve_backfill_task = asyncio.create_task(_startup_asset_curve_backfill_runner())
+    app.state.asset_curve_backfill_task = asset_curve_backfill_task
     try:
         yield
     finally:
@@ -379,6 +422,11 @@ async def app_lifespan(app: FastAPI):
         portfolio_close_snapshot_task.cancel()
         with suppress(asyncio.CancelledError):
             await portfolio_close_snapshot_task
+        asset_curve_backfill_task = getattr(app.state, "asset_curve_backfill_task", None)
+        if asset_curve_backfill_task is not None and not asset_curve_backfill_task.done():
+            asset_curve_backfill_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await asset_curve_backfill_task
         refresh_task = getattr(app.state, "stock_index_refresh_task", None)
         if refresh_task is not None and not refresh_task.done():
             refresh_task.cancel()

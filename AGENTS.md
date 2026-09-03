@@ -345,3 +345,12 @@ CI 通过只能说明自动检查通过，不能替代人工语义收敛，也�
 - **每次对项目做功能/修复类改动并推送 GitHub 时，必须同步在 `README.md` 的「🕘 更新记录」小节顶部（时间倒序）追加一条记录**，格式：`- **YYYY-MM · 标题**：一句话说明改动内容`。
 - README 更新记录与代码 commit **一起提交、一起推送**；禁止只推代码不推 README。
 - 该约定源于用户明确要求（2026-09-03 曾因漏同步更新记录被指出）。
+
+### 10.7 公网访问（Cloudflare Tunnel）
+
+- **公网地址**：`https://seajn.dpdns.org`（指向本地 8000，需登录密码 sea169）。
+- 隧道名 **sea-stock**（Cloudflare 远程管理模式，ingress 在 Cloudflare 云端配置：`seajn.dpdns.org → http://localhost:8000`）。
+- 域名 `seajn.dpdns.org` 为 DigitalPlat 免费域名，NS 已切到 Cloudflare（meilani/sergi.ns.cloudflare.com）。
+- 隧道连接 token 存本地 `C:\Users\admin\.cloudflared\sea-stock-token.txt`（敏感，勿上传/外传）；重建/查 token 用 Cloudflare API（account=650ed596a9195ea43a9bdcfe1317218e，tunnel=84be3885-54a8-462f-acce-70c34c0c1fb9）。
+- 开机自启：启动文件夹 `SEA_Tunnel_Start.vbs` → `C:\Users\admin\cloudflared\start_tunnel.bat`（探活 cloudflared 进程，无则用 token 启动 `cloudflared tunnel run --token <token>`）。
+- 备注：国内访问 Cloudflare 边缘偶发不稳；`cloudflared` 路径 `C:\Program Files (x86)\cloudflared\cloudflared.exe`。

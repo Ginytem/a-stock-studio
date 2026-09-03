@@ -17,19 +17,26 @@ from src.auth import (
     change_password,
     check_rate_limit,
     clear_rate_limit,
+    clear_totp,
     create_session,
+    generate_totp_secret,
     get_client_ip,
     has_stored_password,
+    has_totp,
     is_auth_enabled,
     is_password_changeable,
     is_password_set,
     record_login_failure,
     refresh_auth_state,
+    require_totp_for_request,
     rotate_session_secret,
+    save_totp_secret,
     set_initial_password,
+    totp_provisioning_uri,
     verify_password,
     verify_stored_password,
     verify_session,
+    verify_totp,
 )
 from src.config import Config, setup_env
 from src.core.config_manager import ConfigManager
@@ -46,6 +53,24 @@ class LoginRequest(BaseModel):
 
     password: str = Field(default="", description="Admin password")
     password_confirm: str | None = Field(default=None, alias="passwordConfirm", description="Confirm (first-time)")
+    totp_code: str | None = Field(default=None, alias="totpCode", description="TOTP code (required for public-host logins when bound)")
+
+
+class TotpEnableRequest(BaseModel):
+    """Enable TOTP by verifying a fresh code against the submitted secret."""
+
+    model_config = {"populate_by_name": True}
+
+    secret: str = Field(description="Base32 TOTP secret from setup")
+    code: str = Field(description="6-digit authenticator code")
+
+
+class TotpDisableRequest(BaseModel):
+    """Disable TOTP after confirming the current admin password."""
+
+    model_config = {"populate_by_name": True}
+
+    current_password: str = Field(default="", alias="currentPassword")
 
 
 class ChangePasswordRequest(BaseModel):
@@ -179,6 +204,8 @@ def _get_auth_status_dict(request: Request | None = None) -> dict:
         "passwordSet": _password_set_for_response(auth_enabled),
         "passwordChangeable": is_password_changeable() if auth_enabled else False,
         "setupState": setup_state,
+        "totpBound": has_totp(),
+        "totpRequired": require_totp_for_request(request) if request else False,
     }
 
 
@@ -415,6 +442,15 @@ async def auth_login(request: Request, body: LoginRequest):
                 content={"error": "invalid_password", "message": "密码错误"},
             )
 
+    # 公网访问且已绑定两步验证时，必须提供有效动态码（局域网/本机免）
+    if require_totp_for_request(request):
+        if not verify_totp(body.totp_code or ""):
+            record_login_failure(ip)
+            return JSONResponse(
+                status_code=401,
+                content={"error": "totp_invalid", "message": "动态验证码错误"},
+            )
+
     clear_rate_limit(ip)
     session_val = create_session()
     if not session_val:
@@ -480,3 +516,86 @@ async def auth_logout(request: Request):
     resp = Response(status_code=204)
     resp.delete_cookie(key=COOKIE_NAME, path="/")
     return resp
+
+
+@router.post(
+    "/totp/setup",
+    summary="Start TOTP enrollment",
+    description="Requires login. Generates a fresh base32 secret and otpauth:// URI (not yet saved).",
+)
+async def totp_setup():
+    """Return a new TOTP secret + provisioning URI for the user to scan/add."""
+    secret = generate_totp_secret()
+    return {
+        "secret": secret,
+        "uri": totp_provisioning_uri(secret),
+        "issuer": "SEA",
+        "account": "admin",
+    }
+
+
+@router.post(
+    "/totp/enable",
+    summary="Confirm and enable TOTP",
+    description="Requires login. Verifies a code against the submitted secret, then persists it.",
+)
+async def totp_enable(body: TotpEnableRequest):
+    """Verify the authenticator code and persist the TOTP secret."""
+    if not body.secret.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "secret_required", "message": "缺少验证密钥"},
+        )
+    if not verify_totp(body.code, body.secret):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "totp_invalid", "message": "动态验证码错误，请重试"},
+        )
+    if not save_totp_secret(body.secret.strip()):
+        return JSONResponse(
+            status_code=500,
+            content={"error": "internal_error", "message": "两步验证保存失败"},
+        )
+    return {"ok": True}
+
+
+@router.post(
+    "/totp/disable",
+    summary="Disable TOTP",
+    description="Requires login + current admin password. Removes the bound TOTP secret.",
+)
+async def totp_disable(request: Request, body: TotpDisableRequest):
+    """Remove TOTP after confirming the current password."""
+    if not has_totp():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "totp_not_bound", "message": "尚未开启两步验证"},
+        )
+    current_password = (body.current_password or "").strip()
+    if not current_password:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "current_required", "message": "请输入当前密码"},
+        )
+    ip = get_client_ip(request)
+    if not check_rate_limit(ip):
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "rate_limited",
+                "message": "Too many failed attempts. Please try again later.",
+            },
+        )
+    if not verify_stored_password(current_password):
+        record_login_failure(ip)
+        return JSONResponse(
+            status_code=401,
+            content={"error": "invalid_password", "message": "当前密码错误"},
+        )
+    clear_rate_limit(ip)
+    if not clear_totp():
+        return JSONResponse(
+            status_code=500,
+            content={"error": "internal_error", "message": "两步验证关闭失败"},
+        )
+    return {"ok": True}

@@ -12,7 +12,7 @@ import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { SettingsAlert } from '../components/settings';
 
 const LoginPage: React.FC = () => {
-  const { login, passwordSet, setupState } = useAuth();
+  const { login, passwordSet, setupState, totpRequired } = useAuth();
   const { t } = useUiLanguage();
   const navigate = useNavigate();
 
@@ -27,6 +27,7 @@ const LoginPage: React.FC = () => {
 
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [totpCode, setTotpCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | ParsedApiError | null>(null);
 
@@ -60,7 +61,7 @@ const LoginPage: React.FC = () => {
     }
     setIsSubmitting(true);
     try {
-      const result = await login(password, isFirstTime ? passwordConfirm : undefined);
+      const result = await login(password, isFirstTime ? passwordConfirm : undefined, totpRequired ? totpCode : undefined);
       if (result.success) {
         navigate(redirect, { replace: true });
       } else {
@@ -207,6 +208,22 @@ const LoginPage: React.FC = () => {
                     onChange={(e) => setPasswordConfirm(e.target.value)}
                     disabled={isSubmitting}
                     autoComplete="new-password"
+                  />
+                )}
+
+                {!isFirstTime && totpRequired && (
+                  <Input
+                    id="totpCode"
+                    type="text"
+                    inputMode="numeric"
+                    appearance="login"
+                    autoComplete="one-time-code"
+                    label={t('login.totpLabel')}
+                    placeholder={t('login.totpPlaceholder')}
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value)}
+                    disabled={isSubmitting}
+                    maxLength={6}
                   />
                 )}
               </div>

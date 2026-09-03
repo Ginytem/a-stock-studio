@@ -12,6 +12,7 @@ import {
   AgentBackendStatusPanel,
   AuthSettingsCard,
   ChangePasswordCard,
+  TotpCard,
   GenerationBackendStatusPanel,
   IntelligentImport,
   LLMChannelEditor,
@@ -1608,6 +1609,7 @@ const SettingsPage: React.FC = () => {
               </SettingsSectionCard>
             ) : null}
             {activeCategory === 'system' ? <AuthSettingsCard /> : null}
+            {activeCategory === 'system' ? <TotpCard /> : null}
             {activeCategory === 'system' ? (
               <SchedulerSettingsCard
                 items={rawActiveItems}

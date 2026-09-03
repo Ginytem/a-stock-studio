@@ -10,9 +10,11 @@ type AuthContextValue = {
   passwordSet: boolean;
   passwordChangeable: boolean;
   setupState: 'enabled' | 'password_retained' | 'no_password';
+  totpBound: boolean;
+  totpRequired: boolean;
   isLoading: boolean;
   loadError: ParsedApiError | null;
-  login: (password: string, passwordConfirm?: string) => Promise<{ success: boolean; error?: ParsedApiError }>;
+  login: (password: string, passwordConfirm?: string, totpCode?: string) => Promise<{ success: boolean; error?: ParsedApiError }>;
   changePassword: (
     currentPassword: string,
     newPassword: string,
@@ -44,6 +46,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [passwordSet, setPasswordSet] = useState(false);
   const [passwordChangeable, setPasswordChangeable] = useState(false);
   const [setupState, setSetupState] = useState<'enabled' | 'password_retained' | 'no_password'>('no_password');
+  const [totpBound, setTotpBound] = useState(false);
+  const [totpRequired, setTotpRequired] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<ParsedApiError | null>(null);
 
@@ -57,6 +61,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setPasswordSet(status.passwordSet ?? false);
       setPasswordChangeable(status.passwordChangeable ?? false);
       setSetupState(status.setupState);
+      setTotpBound(status.totpBound ?? false);
+      setTotpRequired(status.totpRequired ?? false);
       if (status.authEnabled && !status.loggedIn) {
         useStockPoolStore.getState().resetDashboardState();
       }
@@ -67,6 +73,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setPasswordSet(false);
       setPasswordChangeable(false);
       setSetupState('no_password');
+      setTotpBound(false);
+      setTotpRequired(false);
       useStockPoolStore.getState().resetDashboardState();
     } finally {
       setIsLoading(false);
@@ -80,10 +88,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(
     async (
       password: string,
-      passwordConfirm?: string
+      passwordConfirm?: string,
+      totpCode?: string
     ): Promise<{ success: boolean; error?: ParsedApiError }> => {
       try {
-        await authApi.login(password, passwordConfirm);
+        await authApi.login(password, passwordConfirm, totpCode);
         await fetchStatus();
         return { success: true };
       } catch (err: unknown) {
@@ -132,6 +141,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         passwordSet,
         passwordChangeable,
         setupState,
+        totpBound,
+        totpRequired,
         isLoading,
         loadError,
         login,

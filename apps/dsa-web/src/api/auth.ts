@@ -6,6 +6,15 @@ export type AuthStatusResponse = {
   passwordSet?: boolean;
   passwordChangeable?: boolean;
   setupState: 'enabled' | 'password_retained' | 'no_password';
+  totpBound?: boolean;
+  totpRequired?: boolean;
+};
+
+export type TotpSetupResponse = {
+  secret: string;
+  uri: string;
+  issuer: string;
+  account: string;
 };
 
 export const authApi = {
@@ -39,10 +48,13 @@ export const authApi = {
     return data;
   },
 
-  async login(password: string, passwordConfirm?: string): Promise<void> {
-    const body: { password: string; passwordConfirm?: string } = { password };
+  async login(password: string, passwordConfirm?: string, totpCode?: string): Promise<void> {
+    const body: { password: string; passwordConfirm?: string; totpCode?: string } = { password };
     if (passwordConfirm !== undefined) {
       body.passwordConfirm = passwordConfirm;
+    }
+    if (totpCode !== undefined) {
+      body.totpCode = totpCode;
     }
     await apiClient.post('/api/v1/auth/login', body);
   },
@@ -61,5 +73,18 @@ export const authApi = {
 
   async logout(): Promise<void> {
     await apiClient.post('/api/v1/auth/logout');
+  },
+
+  async totpSetup(): Promise<TotpSetupResponse> {
+    const { data } = await apiClient.post<TotpSetupResponse>('/api/v1/auth/totp/setup');
+    return data;
+  },
+
+  async totpEnable(secret: string, code: string): Promise<void> {
+    await apiClient.post('/api/v1/auth/totp/enable', { secret, code });
+  },
+
+  async totpDisable(currentPassword: string): Promise<void> {
+    await apiClient.post('/api/v1/auth/totp/disable', { currentPassword });
   },
 };

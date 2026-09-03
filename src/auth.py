@@ -22,6 +22,8 @@ from typing import Optional, Tuple
 
 from dotenv import dotenv_values
 
+import pyotp
+
 logger = logging.getLogger(__name__)
 
 COOKIE_NAME = "dsa_session"
@@ -30,6 +32,13 @@ RATE_LIMIT_WINDOW_SEC = 300
 RATE_LIMIT_MAX_FAILURES = 5
 SESSION_MAX_AGE_HOURS_DEFAULT = 24
 MIN_PASSWORD_LEN = 6
+
+# TOTP (Google Authenticator) 两步验证
+TOTP_ISSUER = "SEA"
+TOTP_ACCOUNT = "admin"
+TOTP_VALID_WINDOW = 1
+PUBLIC_HOST_SUFFIX_ENV = "PUBLIC_HOST_SUFFIX"
+PUBLIC_HOST_SUFFIX_DEFAULT = "dpdns.org"
 
 # Lazy-loaded state
 _auth_enabled: Optional[bool] = None
@@ -486,6 +495,98 @@ def reset_password_cli() -> int:
 
     print("Password has been reset successfully.")
     return 0
+
+
+def _get_totp_secret_path() -> Path:
+    """Path to stored TOTP secret file (parallel to .admin_password_hash)."""
+    return _get_data_dir() / ".totp_secret"
+
+
+def has_totp() -> bool:
+    """Whether a TOTP secret is bound."""
+    p = _get_totp_secret_path()
+    if not p.exists():
+        return False
+    raw = p.read_text().strip()
+    return bool(raw)
+
+
+def _load_totp_secret() -> str:
+    p = _get_totp_secret_path()
+    if not p.exists():
+        return ""
+    return p.read_text().strip()
+
+
+def save_totp_secret(secret: str) -> bool:
+    """Atomically persist a TOTP secret (0o600 where supported)."""
+    data_dir = _get_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = _get_totp_secret_path()
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text((secret or "").strip())
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            pass
+        tmp.replace(path)
+        return True
+    except OSError as exc:
+        logger.error("Failed to write TOTP secret: %s", exc)
+        return False
+
+
+def clear_totp() -> bool:
+    """Remove the bound TOTP secret."""
+    path = _get_totp_secret_path()
+    try:
+        if path.exists():
+            path.unlink()
+        return True
+    except OSError as exc:
+        logger.error("Failed to remove TOTP secret: %s", exc)
+        return False
+
+
+def generate_totp_secret() -> str:
+    """Generate a new base32 TOTP secret for enrollment."""
+    return pyotp.random_base32()
+
+
+def totp_provisioning_uri(secret: str) -> str:
+    """Build otpauth:// URI for QR / manual entry in authenticator apps."""
+    return pyotp.TOTP(secret).provisioning_uri(name=TOTP_ACCOUNT, issuer_name=TOTP_ISSUER)
+
+
+def verify_totp(code: str, secret: str | None = None) -> bool:
+    """Verify a 6-digit TOTP code against a secret (stored or provided)."""
+    code = (code or "").strip()
+    if not code:
+        return False
+    sec = secret or _load_totp_secret()
+    if not sec:
+        return False
+    try:
+        return pyotp.TOTP(sec).verify(code, valid_window=TOTP_VALID_WINDOW)
+    except Exception:  # noqa: BLE001 - malformed code/secret must not raise
+        return False
+
+
+def is_public_host(request) -> bool:
+    """Whether the request arrived through the public host (Host header contains marker).
+
+    公网域名通过 Cloudflare 隧道访问时 Host 为 seajn.dpdns.org；
+    本机 / 局域网直连时 Host 为 127.0.0.1 / localhost / 局域网 IP，不命中 marker。
+    """
+    host = request.headers.get("host", "") or ""
+    marker = os.getenv(PUBLIC_HOST_SUFFIX_ENV, PUBLIC_HOST_SUFFIX_DEFAULT)
+    return bool(marker) and marker in host
+
+
+def require_totp_for_request(request) -> bool:
+    """Public-host requests require the TOTP code once bound."""
+    return has_totp() and is_public_host(request)
 
 
 def _main() -> int:

@@ -354,3 +354,11 @@ CI 通过只能说明自动检查通过，不能替代人工语义收敛，也�
 - 隧道连接 token 存本地 `C:\Users\admin\.cloudflared\sea-stock-token.txt`（敏感，勿上传/外传）；重建/查 token 用 Cloudflare API（account=650ed596a9195ea43a9bdcfe1317218e，tunnel=84be3885-54a8-462f-acce-70c34c0c1fb9）。
 - 开机自启：启动文件夹 `SEA_Tunnel_Start.vbs` → `C:\Users\admin\cloudflared\start_tunnel.bat`（探活 cloudflared 进程，无则用 token 启动 `cloudflared tunnel run --token <token>`）。
 - 备注：国内访问 Cloudflare 边缘偶发不稳；`cloudflared` 路径 `C:\Program Files (x86)\cloudflared\cloudflared.exe`。
+
+### 10.8 两步验证（TOTP，Google Authenticator）
+
+- 功能：公网访问（`seajn.dpdns.org`）登录需在密码外再输入 6 位动态验证码；本机 / 局域网直连免验证码。
+- 判断逻辑：`src/auth.py` 的 `is_public_host()` 按请求 Host 是否包含 `PUBLIC_HOST_SUFFIX`（默认 `dpdns.org`，可在 .env 改）区分公网/本地。
+- secret 存储：`data/.totp_secret`（0o600）；绑定/解绑接口在 `api/v1/endpoints/auth.py`：`POST /api/v1/auth/totp/{setup,enable,disable}`（需登录，disable 需当前密码）。
+- 前端：`LoginPage.tsx` 根据 `status.totpRequired` 条件渲染动态码输入框；设置页 `TotpCard.tsx` 负责扫码绑定/解绑；依赖 `pyotp`（后端）+ `qrcode.react`（前端）。
+- 维护注意：改 `.env` 的 `PUBLIC_HOST_SUFFIX` 会影响公网判定；忘记动态码时直接删除 `data/.totp_secret` 文件即可解绑。

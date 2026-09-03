@@ -1495,6 +1495,11 @@ const PortfolioPage: React.FC = () => {
                         <div className={`text-[11px] ${hasPositionPrice(row) ? 'text-secondary' : 'text-warning'}`}>
                           {getPositionPriceLabel(row)}
                         </div>
+                        {row.priceAlert ? (
+                          <div className="text-[11px] text-warning" title={row.priceAlert}>
+                            ⚠ 价格与行情不一致
+                          </div>
+                        ) : null}
                       </td>
                       <td className="py-2 pr-2 text-right">{formatPositionMoney(row.marketValueBase, row)}</td>
                       <td

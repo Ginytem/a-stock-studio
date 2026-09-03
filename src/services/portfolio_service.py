@@ -773,6 +773,10 @@ class PortfolioService:
         except Exception:  # noqa: BLE001 - 指数是增强项，失败返回空
             market_indices = []
 
+        # 价格一致性校验：以腾讯实时行情为独立参考，校验本地展示价（盘后多为账本今收价），
+        # 差异超过阈值时在持仓项上标记 price_alert，前端据此提示用户核对账本/行情。
+        self._apply_price_consistency_alerts(accounts_payload)
+
         return {
             "as_of": as_of_date.isoformat(),
             "cost_method": method,
@@ -796,6 +800,52 @@ class PortfolioService:
             "indices": market_indices,
             "accounts": accounts_payload,
         }
+
+    def _apply_price_consistency_alerts(
+        self, accounts_payload: List[Dict[str, Any]]
+    ) -> None:
+        """价格一致性校验（只读，不落库）。
+
+        用户口径：有最新账本就以账本为准；同时用独立行情（腾讯）验证价格是否正确——
+        一致说明账本正确，无需提示；不一致则在持仓项上标记 price_alert，前端提示核对。
+
+        阈值 1.5%：正常盘中不同源行情时差通常 <0.5%，昨收/今收等口径错误差异通常 >1.5%。
+        腾讯行情自带 TTL 缓存，不会因本校验增加过多网络请求；获取失败时静默跳过。
+        """
+        positions = [
+            p for acc in accounts_payload for p in acc.get("positions", []) if p
+        ]
+        symbols = list(dict.fromkeys(str(p.get("symbol") or "") for p in positions))
+        symbols = [s for s in symbols if s]
+        if not symbols:
+            return
+        try:
+            from src.portfolio_share import _fetch_tencent_realtime_quotes
+
+            quotes = _fetch_tencent_realtime_quotes(symbols)
+        except Exception:  # noqa: BLE001 - 校验是增强项，失败不阻塞页面
+            return
+        if not quotes:
+            return
+        for p in positions:
+            symbol = str(p.get("symbol") or "")
+            q = quotes.get(symbol)
+            if not q:
+                continue
+            ref = float(q.get("current") or 0)
+            if ref <= 0:
+                continue
+            cur = float(p.get("last_price") or 0)
+            if cur <= 0:
+                continue
+            diff = abs(cur - ref) / ref
+            if diff <= 0.015:
+                continue
+            src = str(p.get("price_source") or "未知")
+            p["price_alert"] = (
+                f"当前价 {cur:.3f} 与行情 {ref:.3f} 不一致（差 {diff * 100:.1f}%），"
+                f"数据来源[{src}]，请核对账本/行情"
+            )
 
     def _resolve_day_pnl(
         self, positions: List[Dict[str, Any]], total_market_value: float

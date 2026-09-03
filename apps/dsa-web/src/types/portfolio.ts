@@ -50,6 +50,7 @@ export interface PortfolioPositionItem {
   priceAvailable?: boolean;
   dataQuality?: 'ok' | 'partial' | string;
   limitations?: string[];
+  priceAlert?: string | null;
 }
 
 export interface PortfolioIndexItem {

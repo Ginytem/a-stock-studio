@@ -170,6 +170,9 @@ class PortfolioPositionItem(BaseModel):
     price_available: bool = True
     data_quality: str = "ok"
     limitations: List[str] = Field(default_factory=list)
+    price_alert: Optional[str] = Field(
+        None, description="价格与独立行情(腾讯)不一致时的提示文案，一致时为 null"
+    )
 
 
 class PortfolioPositionAnalysisRequest(BaseModel):

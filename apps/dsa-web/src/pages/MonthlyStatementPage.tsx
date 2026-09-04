@@ -73,15 +73,16 @@ function currentMonth(): string {
 // ---------------- 个股流水 ---------------- //
 function recordCategory(item: ThsStockLedgerItem['records'][number]) {
   const t = item.recordType;
-  if (t === '买入') return { label: '买入', cls: 'text-[#e04545] bg-[#e04545]/10' };
-  if (t === '卖出') return { label: '卖出', cls: 'text-[#0a8f5c] bg-[#0a8f5c]/10' };
+  if (t === '买入') return { label: '买入', cls: 'text-[#e04545] bg-[#e04545]/10', solid: 'bg-[#e04545]' };
+  if (t === '卖出') return { label: '卖出', cls: 'text-[#0a8f5c] bg-[#0a8f5c]/10', solid: 'bg-[#0a8f5c]' };
   if (t === '除权除息') {
     return item.amount > 0
-      ? { label: '分红', cls: 'text-amber-600 bg-amber-500/10 dark:text-amber-400' }
-      : { label: '除权调整', cls: 'text-muted-text bg-base/70' };
+      ? { label: '分红', cls: 'text-amber-600 bg-amber-500/10 dark:text-amber-400', solid: 'bg-amber-500' }
+      : { label: '除权调整', cls: 'text-muted-text bg-base/70', solid: 'bg-muted-foreground/60' };
   }
-  if (t.includes('股息个税') || t === '缴税') return { label: '股息个税', cls: 'text-muted-text bg-base/70' };
-  return { label: t || '其他', cls: 'text-muted-text bg-base/70' };
+  if (t.includes('股息个税') || t === '缴税')
+    return { label: '股息个税', cls: 'text-muted-text bg-base/70', solid: 'bg-muted-foreground/60' };
+  return { label: t || '其他', cls: 'text-muted-text bg-base/70', solid: 'bg-muted-foreground/60' };
 }
 
 function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
@@ -162,11 +163,15 @@ function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
               return (
                 <div key={idx} className="rounded-lg border border-border/70 bg-base px-3 py-2.5">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm text-muted-text">
-                      {r.date}
-                      {r.time ? <span className="ml-1 text-xs text-muted-text/60">{r.time}</span> : null}
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className={cn('inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-xs font-semibold text-white', cat.solid)}>
+                        {cat.label}
+                      </span>
+                      <span className="truncate text-sm text-muted-text">
+                        {r.date}
+                        {r.time ? <span className="ml-1 text-xs text-muted-text/60">{r.time}</span> : null}
+                      </span>
                     </span>
-                    <span className={cn('inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs', cat.cls)}>{cat.label}</span>
                   </div>
                   <div className="mt-1.5 flex items-baseline justify-between gap-2">
                     <span className="text-sm text-muted-text">

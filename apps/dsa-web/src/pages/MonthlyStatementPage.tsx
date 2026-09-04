@@ -84,6 +84,81 @@ function recordCategory(item: ThsStockLedgerItem['records'][number]) {
   return { label: t || '其他', cls: 'text-muted-text bg-base/70' };
 }
 
+function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
+  const totalFee = st.buyFee + st.sellFee + st.otherFee;
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="累计买入"
+          value={`${st.buyCount} 笔 · ¥${fmt(st.buyAmount)}`}
+          icon={<ArrowDownCircle className="h-4 w-4 text-[#e04545]" />}
+        />
+        <StatCard
+          label="累计卖出"
+          value={`${st.sellCount} 笔 · ¥${fmt(st.sellAmount)}`}
+          icon={<ArrowUpCircle className="h-4 w-4 text-[#0a8f5c]" />}
+        />
+        <StatCard
+          label="累计费用"
+          value={`¥${fmt(totalFee)}`}
+          icon={<Banknote className="h-4 w-4 text-muted-text" />}
+        />
+        <StatCard
+          label="累计分红"
+          value={`${st.dividendCount} 笔 · ¥${fmt(st.dividendAmount)}`}
+          icon={<Coins className="h-4 w-4 text-muted-text" />}
+        />
+      </div>
+
+      {st.records.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-border text-xs text-muted-text">
+                <th className="pb-2 pr-3 font-normal">日期</th>
+                <th className="pb-2 pr-3 font-normal">类别</th>
+                <th className="pb-2 pr-3 text-right font-normal">数量</th>
+                <th className="pb-2 pr-3 text-right font-normal">价格</th>
+                <th className="pb-2 pr-3 text-right font-normal">金额</th>
+                <th className="pb-2 pr-3 text-right font-normal">费用</th>
+                {st.records.some((r) => r.note) ? (
+                  <th className="pb-2 text-right font-normal">备注</th>
+                ) : null}
+              </tr>
+            </thead>
+            <tbody>
+              {st.records.map((r, idx) => {
+                const cat = recordCategory(r);
+                return (
+                  <tr key={idx} className="border-b border-border/60 last:border-0">
+                    <td className="py-2 pr-3 text-muted-text">
+                      {r.date}
+                      {r.time ? <span className="ml-1 text-xs text-muted-text/70">{r.time}</span> : null}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs', cat.cls)}>{cat.label}</span>
+                    </td>
+                    <td className="py-2 pr-3 text-right text-foreground">{fmt(r.quantity)}</td>
+                    <td className="py-2 pr-3 text-right text-foreground">{fmtPrice(r.price)}</td>
+                    <td className="py-2 pr-3 text-right font-medium text-foreground">¥{fmt(r.amount)}</td>
+                    <td className="py-2 pr-3 text-right text-muted-text">¥{fmt(r.fee)}</td>
+                    {st.records.some((rr) => rr.note) ? (
+                      <td className="py-2 text-right text-xs text-muted-text">{r.note || ''}</td>
+                    ) : null}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-text">该股票暂无明细记录（请先在「数据同步」导入账本导出的汇总持仓.xlsx）。</p>
+      )}
+    </div>
+  );
+}
+
 function StockLedgerView() {
   const [ledger, setLedger] = useState<ThsHoldingLedgerItem[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -132,7 +207,7 @@ function StockLedgerView() {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-text">
-        持仓来自同花顺账本实时数据（持仓天数为账本现成值，实时同步）。点击每行「明细」展开该股交易流水；流水明细来自账本导出的「汇总持仓.xlsx」。
+        持仓来自同花顺实时数据。点击每行「明细」展开该股交易流水；流水明细来自账本导出的「汇总持仓.xlsx」。
       </p>
       <Card variant="bordered" padding="none">
         <div className="overflow-x-auto">
@@ -151,11 +226,11 @@ function StockLedgerView() {
             <tbody>
               {ledger.map((st) => {
                 const isOpen = expanded === st.symbol;
-                const totalFee = st.buyFee + st.sellFee + st.otherFee;
                 const pnlCls = st.holdProfit >= 0 ? 'text-[#e04545]' : 'text-[#0a8f5c]';
                 return (
                   <React.Fragment key={st.symbol}>
-                    <tr className={cn('border-b border-border/60 last:border-0', isOpen ? 'bg-muted/30' : 'hover:bg-muted/20')}>
+                    {/* 桌面端：表格行 */}
+                    <tr className={cn('hidden border-b border-border/60 md:table-row', isOpen ? 'bg-muted/30' : 'hover:bg-muted/20')}>
                       <td className="py-2 pl-3 pr-1">
                         <button
                           type="button"
@@ -182,80 +257,55 @@ function StockLedgerView() {
                       </td>
                     </tr>
                     {isOpen ? (
-                      <tr className="border-b border-border/60 bg-muted/20">
+                      <tr className="hidden border-b border-border/60 bg-muted/20 md:table-row">
                         <td colSpan={7} className="px-3 py-3">
-                          <div className="space-y-4">
-                            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                              <StatCard
-                                label="累计买入"
-                                value={`${st.buyCount} 笔 · ¥${fmt(st.buyAmount)}`}
-                                icon={<ArrowDownCircle className="h-4 w-4 text-[#e04545]" />}
-                              />
-                              <StatCard
-                                label="累计卖出"
-                                value={`${st.sellCount} 笔 · ¥${fmt(st.sellAmount)}`}
-                                icon={<ArrowUpCircle className="h-4 w-4 text-[#0a8f5c]" />}
-                              />
-                              <StatCard
-                                label="累计费用"
-                                value={`¥${fmt(totalFee)}`}
-                                icon={<Banknote className="h-4 w-4 text-muted-text" />}
-                              />
-                              <StatCard
-                                label="累计分红"
-                                value={`${st.dividendCount} 笔 · ¥${fmt(st.dividendAmount)}`}
-                                icon={<Coins className="h-4 w-4 text-muted-text" />}
-                              />
-                            </div>
-
-                            {st.records.length ? (
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-left text-sm">
-                                  <thead>
-                                    <tr className="border-b border-border text-xs text-muted-text">
-                                      <th className="pb-2 pr-3 font-normal">日期</th>
-                                      <th className="pb-2 pr-3 font-normal">类别</th>
-                                      <th className="pb-2 pr-3 text-right font-normal">数量</th>
-                                      <th className="pb-2 pr-3 text-right font-normal">价格</th>
-                                      <th className="pb-2 pr-3 text-right font-normal">金额</th>
-                                      <th className="pb-2 pr-3 text-right font-normal">费用</th>
-                                      {st.records.some((r) => r.note) ? (
-                                        <th className="pb-2 text-right font-normal">备注</th>
-                                      ) : null}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {st.records.map((r, idx) => {
-                                      const cat = recordCategory(r);
-                                      return (
-                                        <tr key={idx} className="border-b border-border/60 last:border-0">
-                                          <td className="py-2 pr-3 text-muted-text">
-                                            {r.date}
-                                            {r.time ? <span className="ml-1 text-xs text-muted-text/70">{r.time}</span> : null}
-                                          </td>
-                                          <td className="py-2 pr-3">
-                                            <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs', cat.cls)}>{cat.label}</span>
-                                          </td>
-                                          <td className="py-2 pr-3 text-right text-foreground">{fmt(r.quantity)}</td>
-                                          <td className="py-2 pr-3 text-right text-foreground">{fmtPrice(r.price)}</td>
-                                          <td className="py-2 pr-3 text-right font-medium text-foreground">¥{fmt(r.amount)}</td>
-                                          <td className="py-2 pr-3 text-right text-muted-text">¥{fmt(r.fee)}</td>
-                                          {st.records.some((rr) => rr.note) ? (
-                                            <td className="py-2 text-right text-xs text-muted-text">{r.note || ''}</td>
-                                          ) : null}
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : (
-                              <p className="text-xs text-muted-text">该股票暂无明细记录（请先在「数据同步」导入账本导出的汇总持仓.xlsx）。</p>
-                            )}
-                          </div>
+                          <LedgerDetail st={st} />
                         </td>
                       </tr>
                     ) : null}
+
+                    {/* 手机端：卡片 */}
+                    <tr className="border-b border-border/60 md:hidden">
+                      <td colSpan={7} className="p-0">
+                        <div className={cn('px-3 py-2.5', isOpen && 'bg-muted/20')}>
+                          <button
+                            type="button"
+                            onClick={() => setExpanded(isOpen ? null : st.symbol)}
+                            className="flex w-full items-center justify-between gap-2 text-left"
+                          >
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className={cn('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-text', isOpen && 'border-transparent text-foreground')}>
+                                {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                              </span>
+                              <span className="font-medium text-foreground">{st.symbol}</span>
+                              <span className="truncate text-sm text-muted-text">{st.name || '--'}</span>
+                            </span>
+                          </button>
+                          <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+                            <div className="text-muted-text">
+                              持股 <span className="text-foreground">{fmt(st.quantity)}</span>
+                            </div>
+                            <div className="text-right text-muted-text">
+                              持仓 <span className="text-foreground">{st.holdDays > 0 ? `${st.holdDays} 天` : '--'}</span>
+                            </div>
+                            <div className="col-span-2 text-muted-text">
+                              持有盈亏{' '}
+                              <span className={cn('font-medium', pnlCls)}>{fmt(st.holdProfit)}</span>{' '}
+                              <span className={cn('text-xs', pnlCls)}>{fmtPct(st.holdRate)}</span>
+                            </div>
+                            <div className="col-span-2 text-muted-text">
+                              成本 <span className="text-foreground">{fmtPrice(st.cost)}</span> / 现价{' '}
+                              <span className="text-foreground">{fmtPrice(st.lastPrice)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        {isOpen ? (
+                          <div className="border-t border-border/60 bg-muted/20 px-3 py-3">
+                            <LedgerDetail st={st} />
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
                   </React.Fragment>
                 );
               })}

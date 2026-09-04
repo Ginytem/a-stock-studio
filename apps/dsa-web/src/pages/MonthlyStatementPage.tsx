@@ -249,7 +249,7 @@ function StockLedgerView() {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-text">
-        持仓来自同花顺实时数据。点击每行「明细」展开该股交易流水；流水明细来自账本导出的「汇总持仓.xlsx」。
+        本页面信息来自同花顺实时数据。点击每行「明细」展开该股交易流水。
       </p>
 
       {/* 桌面端：表格（≥768px） */}

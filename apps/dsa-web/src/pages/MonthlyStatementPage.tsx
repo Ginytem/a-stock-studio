@@ -112,46 +112,81 @@ function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
       </div>
 
       {st.records.length ? (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-border text-xs text-muted-text">
-                <th className="pb-2 pr-3 font-normal">日期</th>
-                <th className="pb-2 pr-3 font-normal">类别</th>
-                <th className="pb-2 pr-3 text-right font-normal">数量</th>
-                <th className="pb-2 pr-3 text-right font-normal">价格</th>
-                <th className="pb-2 pr-3 text-right font-normal">金额</th>
-                <th className="pb-2 pr-3 text-right font-normal">费用</th>
-                {st.records.some((r) => r.note) ? (
-                  <th className="pb-2 text-right font-normal">备注</th>
-                ) : null}
-              </tr>
-            </thead>
-            <tbody>
-              {st.records.map((r, idx) => {
-                const cat = recordCategory(r);
-                return (
-                  <tr key={idx} className="border-b border-border/60 last:border-0">
-                    <td className="py-2 pr-3 text-muted-text">
+        <>
+          {/* 桌面端：明细表格 */}
+          <div className="hidden overflow-x-auto md:block">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-border text-xs text-muted-text">
+                  <th className="pb-2 pr-3 font-normal">日期</th>
+                  <th className="pb-2 pr-3 font-normal">类别</th>
+                  <th className="pb-2 pr-3 text-right font-normal">数量</th>
+                  <th className="pb-2 pr-3 text-right font-normal">价格</th>
+                  <th className="pb-2 pr-3 text-right font-normal">金额</th>
+                  <th className="pb-2 pr-3 text-right font-normal">费用</th>
+                  {st.records.some((r) => r.note) ? (
+                    <th className="pb-2 text-right font-normal">备注</th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {st.records.map((r, idx) => {
+                  const cat = recordCategory(r);
+                  return (
+                    <tr key={idx} className="border-b border-border/60 last:border-0">
+                      <td className="py-2 pr-3 text-muted-text">
+                        {r.date}
+                        {r.time ? <span className="ml-1 text-xs text-muted-text/70">{r.time}</span> : null}
+                      </td>
+                      <td className="py-2 pr-3">
+                        <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs', cat.cls)}>{cat.label}</span>
+                      </td>
+                      <td className="py-2 pr-3 text-right text-foreground">{fmt(r.quantity)}</td>
+                      <td className="py-2 pr-3 text-right text-foreground">{fmtPrice(r.price)}</td>
+                      <td className="py-2 pr-3 text-right font-medium text-foreground">¥{fmt(r.amount)}</td>
+                      <td className="py-2 pr-3 text-right text-muted-text">¥{fmt(r.fee)}</td>
+                      {st.records.some((rr) => rr.note) ? (
+                        <td className="py-2 text-right text-xs text-muted-text">{r.note || ''}</td>
+                      ) : null}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 手机端：明细卡片列表 */}
+          <div className="space-y-2 md:hidden">
+            {st.records.map((r, idx) => {
+              const cat = recordCategory(r);
+              return (
+                <div key={idx} className="rounded-lg border border-border/70 bg-base px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm text-muted-text">
                       {r.date}
-                      {r.time ? <span className="ml-1 text-xs text-muted-text/70">{r.time}</span> : null}
-                    </td>
-                    <td className="py-2 pr-3">
-                      <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs', cat.cls)}>{cat.label}</span>
-                    </td>
-                    <td className="py-2 pr-3 text-right text-foreground">{fmt(r.quantity)}</td>
-                    <td className="py-2 pr-3 text-right text-foreground">{fmtPrice(r.price)}</td>
-                    <td className="py-2 pr-3 text-right font-medium text-foreground">¥{fmt(r.amount)}</td>
-                    <td className="py-2 pr-3 text-right text-muted-text">¥{fmt(r.fee)}</td>
-                    {st.records.some((rr) => rr.note) ? (
-                      <td className="py-2 text-right text-xs text-muted-text">{r.note || ''}</td>
-                    ) : null}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      {r.time ? <span className="ml-1 text-xs text-muted-text/60">{r.time}</span> : null}
+                    </span>
+                    <span className={cn('inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs', cat.cls)}>{cat.label}</span>
+                  </div>
+                  <div className="mt-1.5 flex items-baseline justify-between gap-2">
+                    <span className="text-sm text-muted-text">
+                      {r.quantity ? `${fmt(r.quantity)} 股` : '--'}
+                      {r.price ? ` @ ${fmtPrice(r.price)}` : ''}
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">¥{fmt(r.amount)}</span>
+                  </div>
+                  {(r.fee || r.note) ? (
+                    <div className="mt-1 text-xs text-muted-text">
+                      {r.fee ? `费用 ¥${fmt(r.fee)}` : ''}
+                      {r.fee && r.note ? ' · ' : ''}
+                      {r.note || ''}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </>
       ) : (
         <p className="text-xs text-muted-text">该股票暂无明细记录（请先在「数据同步」导入账本导出的汇总持仓.xlsx）。</p>
       )}

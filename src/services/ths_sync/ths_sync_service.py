@@ -290,6 +290,91 @@ class ThsSyncService:
         return {"total": len(records), "records": records}
 
 
+    def stock_ledger(self, *, start_date: str = "", end_date: str = "") -> Dict[str, Any]:
+        """按股票维度汇总本地导入流水（买入/卖出/分红/税费），返回股票列表与各自明细。
+
+        数据源为账本导出文件导入的 portfolio_import_records（含分红/股息税等全类别）。
+        银证转账等资金往来不计入个股流水。返回 stocks 按「最近有记录的在前」排序。
+        """
+        d0 = start_date or ""
+        d1 = end_date or ""
+        res = self.list_local_import_records(start_date=d0 or None, end_date=d1 or None)
+        groups: Dict[str, Dict[str, Any]] = {}
+
+        def _g(symbol: str, name: str) -> Dict[str, Any]:
+            if symbol not in groups:
+                groups[symbol] = {
+                    "symbol": symbol,
+                    "name": name or "",
+                    "buy_count": 0, "buy_amount": 0.0, "buy_fee": 0.0,
+                    "sell_count": 0, "sell_amount": 0.0, "sell_fee": 0.0,
+                    "dividend_count": 0, "dividend_amount": 0.0,
+                    "adjust_count": 0, "adjust_amount": 0.0,
+                    "other_fee": 0.0,
+                    "records": [],
+                    "latest_date": "",
+                }
+            return groups[symbol]
+
+        for r in res.get("records", []):
+            cat = str(r.get("record_type") or "").strip()
+            symbol = str(r.get("code") or "").strip()
+            if not symbol:
+                continue
+            name = str(r.get("name") or "")
+            if _skip_symbol(symbol, name):
+                continue  # 国债逆回购等非持仓标的
+            if cat in self._EXPORT_CATEGORY_CASH_IN or cat in self._EXPORT_CATEGORY_CASH_OUT:
+                continue  # 银证转账等资金往来不计入个股
+            g = _g(symbol, name)
+            amt = float(r.get("amount") or 0)
+            fee = float(r.get("fee") or 0)
+            d = str(r.get("trade_date") or "")
+            if d and d > g["latest_date"]:
+                g["latest_date"] = d
+            g["records"].append({
+                "record_type": cat,
+                "date": d,
+                "time": str(r.get("trade_time") or ""),
+                "quantity": float(r.get("quantity") or 0),
+                "price": float(r.get("price") or 0),
+                "amount": amt,
+                "fee": fee,
+                "note": r.get("note") or "",
+            })
+            if cat == "买入":
+                g["buy_count"] += 1
+                g["buy_amount"] += abs(amt)
+                g["buy_fee"] += fee
+            elif cat == "卖出":
+                g["sell_count"] += 1
+                g["sell_amount"] += abs(amt)
+                g["sell_fee"] += fee
+            elif cat == "除权除息":
+                if amt > 0:
+                    g["dividend_count"] += 1
+                    g["dividend_amount"] += amt
+                else:
+                    g["adjust_count"] += 1
+                    g["adjust_amount"] += abs(amt)
+            elif "股息个税" in cat or cat == "缴税":
+                g["other_fee"] += abs(amt)
+            # 其他类别（利息等）仅入明细，不参与上述聚合
+
+        stocks = list(groups.values())
+        stocks.sort(key=lambda x: x["latest_date"], reverse=True)
+        for st in stocks:
+            st["records"].sort(key=lambda x: (x["date"], x["time"]), reverse=True)
+            st["buy_amount"] = round(st["buy_amount"], 2)
+            st["sell_amount"] = round(st["sell_amount"], 2)
+            st["buy_fee"] = round(st["buy_fee"], 2)
+            st["sell_fee"] = round(st["sell_fee"], 2)
+            st["dividend_amount"] = round(st["dividend_amount"], 2)
+            st["adjust_amount"] = round(st["adjust_amount"], 2)
+            st["other_fee"] = round(st["other_fee"], 2)
+        return {"total_stocks": len(stocks), "stocks": stocks}
+
+
     def build_statement(self, *, month: str, account_id: Optional[int] = None, cost_method: str = "fifo") -> Dict[str, Any]:
         """从账本实时拉取指定月份的全部交易（含国债逆回购等），聚合生成月度对账单。
 

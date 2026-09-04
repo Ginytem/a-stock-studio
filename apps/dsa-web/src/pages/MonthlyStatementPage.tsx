@@ -114,8 +114,8 @@ function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
 
       {st.records.length ? (
         <>
-          {/* 桌面端：明细表格 */}
-          <div className="hidden overflow-x-auto md:block">
+          {/* 桌面端：明细表格（≥1024px 才显示表格，避免窄屏横向滚动） */}
+          <div className="hidden overflow-x-auto lg:block">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-text">
@@ -156,8 +156,8 @@ function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
             </table>
           </div>
 
-          {/* 手机端：明细卡片列表 */}
-          <div className="space-y-2 md:hidden">
+          {/* 窄屏/手机端：明细卡片列表 */}
+          <div className="space-y-2 lg:hidden">
             {st.records.map((r, idx) => {
               const cat = recordCategory(r);
               return (

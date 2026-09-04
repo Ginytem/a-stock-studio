@@ -178,6 +178,7 @@ class ThsSyncService:
                     m["hold_profit"] = m.get("hold_profit", 0.0) + p.get("hold_profit", 0.0)
                     m["day_pnl"] = m.get("day_pnl", 0.0) + p.get("day_pnl", 0.0)
                     m["prev_mv"] = m.get("prev_mv", 0.0) + _prev_mv_of(p)
+                    m["hold_days"] = max(int(m.get("hold_days") or 0), int(p.get("hold_days") or 0))
                     m["account_count"] += 1
                 else:
                     merged_positions[code] = {
@@ -373,6 +374,107 @@ class ThsSyncService:
             st["adjust_amount"] = round(st["adjust_amount"], 2)
             st["other_fee"] = round(st["other_fee"], 2)
         return {"total_stocks": len(stocks), "stocks": stocks}
+
+
+    def holding_ledger(self, *, start_date: str = "", end_date: str = "") -> Dict[str, Any]:
+        """当前持仓表格数据：账本持仓（含现成 hold_days/成本/现价/盈亏）+ 本地导入流水明细。
+
+        持仓字段优先取账本实时接口（hold_days 为账本现成值，无需自行计算）；
+        未登录时回退本地快照（此时持仓天数为 0，前端显示 --）。
+        """
+        if self.client.is_logged_in():
+            data = self.fetch_merged()
+            positions = data.get("positions", [])
+        else:
+            positions = []
+            account = self._find_or_create_account(DEFAULT_ACCOUNT_NAME)
+            snapshot = self.portfolio_service.get_portfolio_snapshot(account_id=account["id"], include_realtime=False)
+            for acc in snapshot.get("accounts", []):
+                for p in acc.get("positions", []):
+                    positions.append({
+                        "code": str(p.get("symbol") or ""),
+                        "name": str(p.get("name") or ""),
+                        "quantity": float(p.get("quantity") or 0),
+                        "cost": float(p.get("avg_cost") or 0),
+                        "price": float(p.get("last_price") or 0),
+                        "hold_profit": float(p.get("unrealized_pnl_base") or 0),
+                        "hold_rate": float(p.get("unrealized_pnl_pct") or 0),
+                        "hold_days": 0,
+                        "day_pnl": float(p.get("day_pnl") or 0),
+                        "day_pnl_pct": float(p.get("day_pnl_pct") or 0),
+                    })
+
+        # 本地导入流水按 code 索引（含分红/股息税等全类别，过滤逆回购与银证转账）
+        res = self.list_local_import_records(start_date=start_date or None, end_date=end_date or None)
+        by_code: Dict[str, List[Dict[str, Any]]] = {}
+        for r in res.get("records", []):
+            code = str(r.get("code") or "").strip()
+            if not code:
+                continue
+            name = str(r.get("name") or "")
+            if _skip_symbol(code, name):
+                continue
+            cat = str(r.get("record_type") or "").strip()
+            if cat in self._EXPORT_CATEGORY_CASH_IN or cat in self._EXPORT_CATEGORY_CASH_OUT:
+                continue
+            by_code.setdefault(code, []).append(r)
+
+        stocks: List[Dict[str, Any]] = []
+        for p in positions:
+            code = str(p.get("code") or "")
+            qty = float(p.get("quantity") or 0)
+            if not code or qty <= 0:
+                continue
+            name = str(p.get("name") or "")
+            buy_c = buy_a = buy_f = sell_c = sell_a = sell_f = 0.0
+            div_c = div_a = adj_c = adj_a = other_f = 0.0
+            buy_c = sell_c = div_c = adj_c = 0
+            recs: List[Dict[str, Any]] = []
+            for r in sorted(by_code.get(code, []), key=lambda x: (str(x.get("trade_date") or ""), str(x.get("trade_time") or "")), reverse=True):
+                cat = str(r.get("record_type") or "").strip()
+                amt = float(r.get("amount") or 0)
+                fee = float(r.get("fee") or 0)
+                recs.append({
+                    "record_type": cat,
+                    "date": str(r.get("trade_date") or ""),
+                    "time": str(r.get("trade_time") or ""),
+                    "quantity": float(r.get("quantity") or 0),
+                    "price": float(r.get("price") or 0),
+                    "amount": amt,
+                    "fee": fee,
+                    "note": r.get("note") or "",
+                })
+                if cat == "买入":
+                    buy_c += 1; buy_a += abs(amt); buy_f += fee
+                elif cat == "卖出":
+                    sell_c += 1; sell_a += abs(amt); sell_f += fee
+                elif cat == "除权除息":
+                    if amt > 0:
+                        div_c += 1; div_a += amt
+                    else:
+                        adj_c += 1; adj_a += abs(amt)
+                elif "股息个税" in cat or cat == "缴税":
+                    other_f += abs(amt)
+            stocks.append({
+                "symbol": code,
+                "name": name,
+                "quantity": qty,
+                "cost": float(p.get("cost") or 0),
+                "last_price": float(p.get("price") or p.get("last_price") or 0),
+                "hold_profit": float(p.get("hold_profit") or 0),
+                "hold_rate": float(p.get("hold_rate") or 0),
+                "hold_days": int(p.get("hold_days") or 0),
+                "day_pnl": float(p.get("day_pnl") or 0),
+                "day_pnl_pct": float(p.get("day_pnl_pct") or 0),
+                "buy_count": buy_c, "buy_amount": round(buy_a, 2), "buy_fee": round(buy_f, 2),
+                "sell_count": sell_c, "sell_amount": round(sell_a, 2), "sell_fee": round(sell_f, 2),
+                "dividend_count": div_c, "dividend_amount": round(div_a, 2),
+                "adjust_count": adj_c, "adjust_amount": round(adj_a, 2),
+                "other_fee": round(other_f, 2),
+                "records": recs,
+            })
+        stocks.sort(key=lambda x: (x["hold_days"], x["symbol"]), reverse=True)
+        return {"total": len(stocks), "stocks": stocks}
 
 
     def build_statement(self, *, month: str, account_id: Optional[int] = None, cost_method: str = "fifo") -> Dict[str, Any]:

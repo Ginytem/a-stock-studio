@@ -111,6 +111,36 @@ export type ThsStockLedgerResult = {
   stocks: ThsStockLedgerItem[];
 };
 
+export type ThsHoldingLedgerItem = {
+  symbol: string;
+  name: string;
+  quantity: number;
+  cost: number;
+  lastPrice: number;
+  holdProfit: number;
+  holdRate: number;
+  holdDays: number;
+  dayPnl: number;
+  dayPnlPct: number;
+  buyCount: number;
+  buyAmount: number;
+  buyFee: number;
+  sellCount: number;
+  sellAmount: number;
+  sellFee: number;
+  dividendCount: number;
+  dividendAmount: number;
+  adjustCount: number;
+  adjustAmount: number;
+  otherFee: number;
+  records: ThsStockLedgerRecord[];
+};
+
+export type ThsHoldingLedgerResult = {
+  total: number;
+  stocks: ThsHoldingLedgerItem[];
+};
+
 export type ThsReconcileResult = {
   available: boolean;
   reason?: string;
@@ -185,6 +215,14 @@ export const thsApi = {
     return apiClient
       .get<ThsStockLedgerResult>(`/api/v1/ths/stock-ledger?${params.toString()}`, { timeout: LONG_TIMEOUT })
       .then((r) => toCamelCase<ThsStockLedgerResult>(r.data));
+  },
+  getHoldingLedger: (startDate?: string, endDate?: string) => {
+    const params = new URLSearchParams();
+    if (startDate) params.set('start_date', startDate);
+    if (endDate) params.set('end_date', endDate);
+    return apiClient
+      .get<ThsHoldingLedgerResult>(`/api/v1/ths/holding-ledger?${params.toString()}`, { timeout: LONG_TIMEOUT })
+      .then((r) => toCamelCase<ThsHoldingLedgerResult>(r.data));
   },
   reconcile: () =>
     apiClient

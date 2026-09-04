@@ -115,6 +115,18 @@ def stock_ledger(
         raise _internal_error("查询个股流水失败", exc)
 
 
+@router.get("/holding-ledger")
+def holding_ledger(
+    start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+):
+    """当前持仓表格数据：账本持仓（含持仓天数/成本/现价/盈亏）+ 本地流水明细。"""
+    try:
+        return _service().holding_ledger(start_date=start_date or "", end_date=end_date or "")
+    except Exception as exc:  # noqa: BLE001
+        raise _internal_error("查询持仓流水失败", exc)
+
+
 @router.post("/sync")
 def sync(import_asset: bool = Query(True, description="是否同步资产历史曲线")):
     """拉取账本汇总持仓与交易并导入本地账户。"""

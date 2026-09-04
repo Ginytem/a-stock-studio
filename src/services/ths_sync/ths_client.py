@@ -187,6 +187,7 @@ class ThsSession:
                 # 当日盈亏（账本口径：pre_profit=当日盈亏金额，pre_rate=当日盈亏率）
                 "day_pnl": float(p.get("pre_profit") or 0),
                 "day_pnl_pct": float(p.get("pre_rate") or 0),
+                "hold_days": int(float(p.get("hold_days") or 0)),
                 "market": p.get("market"),
             })
         return {

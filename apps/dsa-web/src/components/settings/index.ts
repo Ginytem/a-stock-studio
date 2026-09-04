@@ -13,3 +13,5 @@ export * from './AuthSettingsCard';
 export * from './TotpCard';
 export * from './GenerationBackendStatusPanel';
 export * from './AgentBackendStatusPanel';
+
+export { ShareSettingsCard } from './ShareSettingsCard';

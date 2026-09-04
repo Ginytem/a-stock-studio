@@ -10,6 +10,8 @@
 6. 可选：导入资产历史曲线（asset_trend）到本地日快照
 """
 import hashlib
+import time
+import uuid
 import json
 import os
 from datetime import date, timedelta
@@ -1549,3 +1551,109 @@ class ThsSyncService:
         )
         with open(cfg_path, "w", encoding="utf-8") as fh:
             json.dump(config, fh, ensure_ascii=False, indent=2)
+
+    # ------------------------------------------------------------------
+    # 独立访客分享页配置（展示股票白名单 + 固定口令）
+    # ------------------------------------------------------------------
+    def _share_config_path(self) -> str:
+        return os.path.join(os.path.dirname(self.cookie_file), "share_config.json")
+
+    def get_share_config(self) -> Dict[str, Any]:
+        """分享页配置：{enabled, symbols, password_hash, password_salt, updated_at}。"""
+        config: Dict[str, Any] = {
+            "enabled": False,
+            "symbols": [],
+            "password_hash": "",
+            "password_salt": "",
+            "updated_at": "",
+        }
+        path = self._share_config_path()
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    config.update(json.load(fh))
+            except Exception:  # noqa: BLE001
+                pass
+        return config
+
+    def save_share_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        import datetime
+        config["updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        path = self._share_config_path()
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(config, fh, ensure_ascii=False, indent=2)
+        return config
+
+    @staticmethod
+    def _hash_share_password(password: str, salt: str) -> str:
+        return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+    def set_share_password(self, password: str) -> None:
+        """设置固定口令（修改后旧口令立即失效）。传入空串则清除口令。"""
+        cfg = self.get_share_config()
+        password = (password or "").strip()
+        if not password:
+            cfg["password_hash"] = ""
+            cfg["password_salt"] = ""
+        else:
+            salt = uuid.uuid4().hex
+            cfg["password_hash"] = self._hash_share_password(password, salt)
+            cfg["password_salt"] = salt
+        self.save_share_config(cfg)
+
+    def verify_share_password(self, password: str) -> bool:
+        """校验固定口令；未设置口令或口令不匹配返回 False。"""
+        cfg = self.get_share_config()
+        h = cfg.get("password_hash") or ""
+        salt = cfg.get("password_salt") or ""
+        if not h or not salt:
+            return False
+        return h == self._hash_share_password(password or "", salt)
+
+    def share_whitelist_symbols(self) -> List[str]:
+        """返回分享页白名单股票代码（去空白、去重、保持顺序）。"""
+        cfg = self.get_share_config()
+        seen: List[str] = []
+        for raw in cfg.get("symbols") or []:
+            code = str(raw or "").strip()
+            if code and code not in seen:
+                seen.append(code)
+        return seen
+
+    # ------------------------------------------------------------------
+    # 分享页访客会话（口令换取 12 小时有效会话，过期需重新输入口令）
+    # ------------------------------------------------------------------
+    def _share_session_path(self) -> str:
+        return os.path.join(os.path.dirname(self.cookie_file), "share_session.json")
+
+    def issue_share_session(self, hours: float = 12.0) -> str:
+        """口令校验通过后发放一次性会话 token，存盘并返回。"""
+        token = uuid.uuid4().hex + uuid.uuid4().hex
+        payload = {
+            "token": token,
+            "issued_at": time.time(),
+            "expires_at": time.time() + float(hours) * 3600,
+        }
+        path = self._share_session_path()
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+        except Exception:  # noqa: BLE001
+            pass
+        return token
+
+    def verify_share_session(self, token: str) -> bool:
+        """校验访客会话 token 是否有效（未过期）。"""
+        if not token:
+            return False
+        try:
+            with open(self._share_session_path(), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if data.get("token") != token:
+                return False
+            expires = float(data.get("expires_at") or 0)
+            return time.time() < expires
+        except Exception:  # noqa: BLE001
+            return False
+
+

@@ -71,7 +71,7 @@ function currentMonth(): string {
 }
 
 // ---------------- 个股流水 ---------------- //
-function recordCategory(item: ThsStockLedgerItem['records'][number]) {
+export function recordCategory(item: ThsStockLedgerItem['records'][number]) {
   const t = item.recordType;
   if (t === '买入') return { label: '买入', cls: 'text-[#e04545] bg-[#e04545]/10', solid: 'bg-[#e04545]' };
   if (t === '卖出') return { label: '卖出', cls: 'text-[#0a8f5c] bg-[#0a8f5c]/10', solid: 'bg-[#0a8f5c]' };
@@ -85,7 +85,7 @@ function recordCategory(item: ThsStockLedgerItem['records'][number]) {
   return { label: t || '其他', cls: 'text-muted-text bg-base/70', solid: 'bg-muted-foreground/60' };
 }
 
-function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
+export function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
   const totalFee = st.buyFee + st.sellFee + st.otherFee;
   return (
     <div className="space-y-4">
@@ -199,47 +199,41 @@ function LedgerDetail({ st }: { st: ThsHoldingLedgerItem }) {
   );
 }
 
-function StockLedgerView() {
-  const [ledger, setLedger] = useState<ThsHoldingLedgerItem[] | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<ParsedApiError | null>(null);
+export function HoldingLedgerTable({
+  stocks,
+  isLoading,
+  error,
+  onRetry,
+  onDismiss,
+  hint = '本页面信息来自同花顺实时数据。点击每行「明细」展开该股交易流水。',
+  emptyTitle = '暂无持仓数据',
+  emptyDescription = '未获取到当前持仓。',
+}: {
+  stocks: ThsHoldingLedgerItem[] | null;
+  isLoading: boolean;
+  error: ParsedApiError | null;
+  onRetry: () => void;
+  onDismiss?: () => void;
+  hint?: string;
+  emptyTitle?: string;
+  emptyDescription?: string;
+}) {
   const [expanded, setExpanded] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await thsApi.getHoldingLedger();
-      setLedger(result.stocks ?? []);
-    } catch (err) {
-      setError({ title: '加载失败', message: '加载个股流水失败', rawMessage: String(err), category: 'unknown' });
-      setLedger(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   if (error) {
     return (
-      <ApiErrorAlert error={error} actionLabel="重试" onAction={() => void load()} dismissLabel="关闭" onDismiss={() => setError(null)} />
+      <ApiErrorAlert error={error} actionLabel="重试" onAction={onRetry} dismissLabel="关闭" onDismiss={onDismiss ?? (() => undefined)} />
     );
   }
 
-  if (isLoading && !ledger) {
+  if (isLoading && !stocks) {
     return <div className="text-sm text-muted-text">加载中…</div>;
   }
 
-  if (!ledger || ledger.length === 0) {
+  if (!stocks || stocks.length === 0) {
     return (
       <Card variant="bordered" padding="lg">
-        <EmptyState
-          title="暂无持仓数据"
-          description="未获取到当前持仓。请确认同花顺账本已登录（设置页「数据同步」可扫码登录），或在「数据同步」中导入汇总持仓.xlsx。"
-        />
+        <EmptyState title={emptyTitle} description={emptyDescription} />
       </Card>
     );
   }
@@ -248,9 +242,7 @@ function StockLedgerView() {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-text">
-        本页面信息来自同花顺实时数据。点击每行「明细」展开该股交易流水。
-      </p>
+      {hint ? <p className="text-xs text-muted-text">{hint}</p> : null}
 
       {/* 桌面端：表格（≥768px） */}
       <div className="hidden md:block">
@@ -269,7 +261,7 @@ function StockLedgerView() {
                 </tr>
               </thead>
               <tbody>
-                {ledger.map((st) => {
+                {stocks.map((st) => {
                   const isOpen = expanded === st.symbol;
                   return (
                     <React.Fragment key={st.symbol}>
@@ -317,7 +309,7 @@ function StockLedgerView() {
 
       {/* 手机端：卡片（独立容器，不再受表格 min-w 约束，一屏完整无横向滚动） */}
       <div className="space-y-3 md:hidden">
-        {ledger.map((st) => {
+        {stocks.map((st) => {
           const isOpen = expanded === st.symbol;
           return (
             <Card key={st.symbol} variant="bordered" padding="none">
@@ -363,6 +355,40 @@ function StockLedgerView() {
         })}
       </div>
     </div>
+  );
+}
+
+function StockLedgerView() {
+  const [ledger, setLedger] = useState<ThsHoldingLedgerItem[] | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<ParsedApiError | null>(null);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await thsApi.getHoldingLedger();
+      setLedger(result.stocks ?? []);
+    } catch (err) {
+      setError({ title: '加载失败', message: '加载个股流水失败', rawMessage: String(err), category: 'unknown' });
+      setLedger(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <HoldingLedgerTable
+      stocks={ledger}
+      isLoading={isLoading}
+      error={error}
+      onRetry={() => void load()}
+      onDismiss={() => setError(null)}
+    />
   );
 }
 

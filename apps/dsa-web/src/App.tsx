@@ -26,7 +26,7 @@ const DecisionSignalsPage = lazy(() => import('./pages/DecisionSignalsPage'));
 const AlertsPage = lazy(() => import('./pages/AlertsPage'));
 const TokenUsagePage = lazy(() => import('./pages/TokenUsagePage'));
 const StockScreeningPage = lazy(() => import('./pages/StockScreeningPage'));
-
+const ShareLedgerPage = lazy(() => import('./pages/ShareLedgerPage'));
 const AppContent: React.FC = () => {
   const location = useLocation();
   const { authEnabled, loggedIn, isLoading, loadError, refreshStatus } = useAuth();
@@ -35,6 +35,18 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     useAgentChatStore.getState().setCurrentRoute(location.pathname);
   }, [location.pathname]);
+
+  // 访客分享页：完全独立于管理员登录态，不跳转 /login
+  if (location.pathname.startsWith('/share')) {
+    return (
+      <StandaloneRouteBoundary>
+        <Routes>
+          <Route path="/share/ledger" element={<ShareLedgerPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </StandaloneRouteBoundary>
+    );
+  }
 
   if (isLoading) {
     return <PageLoadingFallback />;

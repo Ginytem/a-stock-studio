@@ -23,6 +23,7 @@ import {
   SettingsLoading,
   SettingsPanelErrorBoundary,
   SettingsSectionCard,
+  ShareSettingsCard,
 } from '../components/settings';
 import { WEB_BUILD_INFO } from '../utils/constants';
 import { parseStockListValue } from '../utils/stockList';
@@ -1610,6 +1611,7 @@ const SettingsPage: React.FC = () => {
             ) : null}
             {activeCategory === 'system' ? <AuthSettingsCard /> : null}
             {activeCategory === 'system' ? <TotpCard /> : null}
+            {activeCategory === 'system' ? <ShareSettingsCard /> : null}
             {activeCategory === 'system' ? (
               <SchedulerSettingsCard
                 items={rawActiveItems}

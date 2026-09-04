@@ -12,6 +12,7 @@ API v1 路由聚合
 from fastapi import APIRouter
 
 from api.v1.endpoints import (
+    share,
     agent,
     alerts,
     screening,
@@ -115,6 +116,12 @@ router.include_router(
     intelligence.router,
     prefix="/intelligence",
     tags=["Intelligence"]
+)
+
+router.include_router(
+    share.router,
+    prefix="/share",
+    tags=["Share"]
 )
 
 router.include_router(

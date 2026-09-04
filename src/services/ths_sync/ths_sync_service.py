@@ -475,7 +475,8 @@ class ThsSyncService:
                 "other_fee": round(other_f, 2),
                 "records": recs,
             })
-        stocks.sort(key=lambda x: (x["hold_days"], x["symbol"]), reverse=True)
+        # 按持仓天数升序（持有越短越靠前），同天数按代码升序
+        stocks.sort(key=lambda x: (x["hold_days"], x["symbol"]))
         return {"total": len(stocks), "stocks": stocks}
 
 

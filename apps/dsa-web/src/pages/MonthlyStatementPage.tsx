@@ -292,8 +292,8 @@ function StockLedgerView() {
                           <span className={cn('ml-1.5 text-xs', pnlCls(st.holdProfit))}>{fmtPct(st.holdRate)}</span>
                         </td>
                         <td className="px-2 py-2 text-right text-muted-text">
-                          <span className="text-foreground">{fmtPrice(st.cost)}</span>
-                          <span className="ml-1.5 text-xs text-muted-text/70">/ {fmtPrice(st.lastPrice)}</span>
+                          <span className="text-xs text-muted-text/70">{fmtPrice(st.cost)}</span>
+                          <span className="ml-1.5 text-foreground">/ {fmtPrice(st.lastPrice)}</span>
                         </td>
                         <td className="py-2 pl-2 pr-3 text-right text-foreground">
                           {st.holdDays > 0 ? `${st.holdDays} 天` : '--'}
@@ -348,7 +348,7 @@ function StockLedgerView() {
                     <span className={cn('text-xs', pnlCls(st.holdProfit))}>{fmtPct(st.holdRate)}</span>
                   </div>
                   <div className="col-span-2 text-muted-text">
-                    成本 <span className="text-foreground">{fmtPrice(st.cost)}</span> / 现价{' '}
+                    成本 <span className="text-xs text-muted-text/70">{fmtPrice(st.cost)}</span> / 现价{' '}
                     <span className="text-foreground">{fmtPrice(st.lastPrice)}</span>
                   </div>
                 </div>

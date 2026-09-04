@@ -244,115 +244,124 @@ function StockLedgerView() {
     );
   }
 
+  const pnlCls = (v: number) => (v >= 0 ? 'text-[#e04545]' : 'text-[#0a8f5c]');
+
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-text">
         持仓来自同花顺实时数据。点击每行「明细」展开该股交易流水；流水明细来自账本导出的「汇总持仓.xlsx」。
       </p>
-      <Card variant="bordered" padding="none">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-xs text-muted-text">
-                <th className="w-12 py-2.5 pl-3 pr-1 font-normal">明细</th>
-                <th className="px-2 py-2.5 font-normal">代码</th>
-                <th className="px-2 py-2.5 font-normal">名称</th>
-                <th className="px-2 py-2.5 text-right font-normal">持股数量</th>
-                <th className="px-2 py-2.5 text-right font-normal">持有盈亏 / 盈亏比例</th>
-                <th className="px-2 py-2.5 text-right font-normal">成本价 / 现价</th>
-                <th className="py-2.5 pl-2 pr-3 text-right font-normal">持仓天数</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ledger.map((st) => {
-                const isOpen = expanded === st.symbol;
-                const pnlCls = st.holdProfit >= 0 ? 'text-[#e04545]' : 'text-[#0a8f5c]';
-                return (
-                  <React.Fragment key={st.symbol}>
-                    {/* 桌面端：表格行 */}
-                    <tr className={cn('hidden border-b border-border/60 md:table-row', isOpen ? 'bg-muted/30' : 'hover:bg-muted/20')}>
-                      <td className="py-2 pl-3 pr-1">
-                        <button
-                          type="button"
-                          onClick={() => setExpanded(isOpen ? null : st.symbol)}
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-text transition-colors hover:bg-muted hover:text-foreground"
-                          title={isOpen ? '收起交易明细' : '查看交易明细'}
-                        >
-                          {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                        </button>
-                      </td>
-                      <td className="px-2 py-2 font-medium text-foreground">{st.symbol}</td>
-                      <td className="px-2 py-2 text-muted-text">{st.name || '--'}</td>
-                      <td className="px-2 py-2 text-right text-foreground">{fmt(st.quantity)}</td>
-                      <td className="px-2 py-2 text-right">
-                        <span className={cn('font-medium', pnlCls)}>{fmt(st.holdProfit)}</span>
-                        <span className={cn('ml-1.5 text-xs', pnlCls)}>{fmtPct(st.holdRate)}</span>
-                      </td>
-                      <td className="px-2 py-2 text-right text-muted-text">
-                        <span className="text-foreground">{fmtPrice(st.cost)}</span>
-                        <span className="ml-1.5 text-xs text-muted-text/70">/ {fmtPrice(st.lastPrice)}</span>
-                      </td>
-                      <td className="py-2 pl-2 pr-3 text-right text-foreground">
-                        {st.holdDays > 0 ? `${st.holdDays} 天` : '--'}
-                      </td>
-                    </tr>
-                    {isOpen ? (
-                      <tr className="hidden border-b border-border/60 bg-muted/20 md:table-row">
-                        <td colSpan={7} className="px-3 py-3">
-                          <LedgerDetail st={st} />
-                        </td>
-                      </tr>
-                    ) : null}
 
-                    {/* 手机端：卡片 */}
-                    <tr className="border-b border-border/60 md:hidden">
-                      <td colSpan={7} className="p-0">
-                        <div className={cn('px-3 py-2.5', isOpen && 'bg-muted/20')}>
+      {/* 桌面端：表格（≥768px） */}
+      <div className="hidden md:block">
+        <Card variant="bordered" padding="none">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/40 text-xs text-muted-text">
+                  <th className="w-12 py-2.5 pl-3 pr-1 font-normal">明细</th>
+                  <th className="px-2 py-2.5 font-normal">代码</th>
+                  <th className="px-2 py-2.5 font-normal">名称</th>
+                  <th className="px-2 py-2.5 text-right font-normal">持股数量</th>
+                  <th className="px-2 py-2.5 text-right font-normal">持有盈亏 / 盈亏比例</th>
+                  <th className="px-2 py-2.5 text-right font-normal">成本价 / 现价</th>
+                  <th className="py-2.5 pl-2 pr-3 text-right font-normal">持仓天数</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ledger.map((st) => {
+                  const isOpen = expanded === st.symbol;
+                  return (
+                    <React.Fragment key={st.symbol}>
+                      <tr className={cn('border-b border-border/60', isOpen ? 'bg-muted/30' : 'hover:bg-muted/20')}>
+                        <td className="py-2 pl-3 pr-1">
                           <button
                             type="button"
                             onClick={() => setExpanded(isOpen ? null : st.symbol)}
-                            className="flex w-full items-center justify-between gap-2 text-left"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-text transition-colors hover:bg-muted hover:text-foreground"
+                            title={isOpen ? '收起交易明细' : '查看交易明细'}
                           >
-                            <span className="flex min-w-0 items-center gap-2">
-                              <span className={cn('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-text', isOpen && 'border-transparent text-foreground')}>
-                                {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                              </span>
-                              <span className="font-medium text-foreground">{st.symbol}</span>
-                              <span className="truncate text-sm text-muted-text">{st.name || '--'}</span>
-                            </span>
+                            {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                           </button>
-                          <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
-                            <div className="text-muted-text">
-                              持股 <span className="text-foreground">{fmt(st.quantity)}</span>
-                            </div>
-                            <div className="text-right text-muted-text">
-                              持仓 <span className="text-foreground">{st.holdDays > 0 ? `${st.holdDays} 天` : '--'}</span>
-                            </div>
-                            <div className="col-span-2 text-muted-text">
-                              持有盈亏{' '}
-                              <span className={cn('font-medium', pnlCls)}>{fmt(st.holdProfit)}</span>{' '}
-                              <span className={cn('text-xs', pnlCls)}>{fmtPct(st.holdRate)}</span>
-                            </div>
-                            <div className="col-span-2 text-muted-text">
-                              成本 <span className="text-foreground">{fmtPrice(st.cost)}</span> / 现价{' '}
-                              <span className="text-foreground">{fmtPrice(st.lastPrice)}</span>
-                            </div>
-                          </div>
-                        </div>
-                        {isOpen ? (
-                          <div className="border-t border-border/60 bg-muted/20 px-3 py-3">
+                        </td>
+                        <td className="px-2 py-2 font-medium text-foreground">{st.symbol}</td>
+                        <td className="px-2 py-2 text-muted-text">{st.name || '--'}</td>
+                        <td className="px-2 py-2 text-right text-foreground">{fmt(st.quantity)}</td>
+                        <td className="px-2 py-2 text-right">
+                          <span className={cn('font-medium', pnlCls(st.holdProfit))}>{fmt(st.holdProfit)}</span>
+                          <span className={cn('ml-1.5 text-xs', pnlCls(st.holdProfit))}>{fmtPct(st.holdRate)}</span>
+                        </td>
+                        <td className="px-2 py-2 text-right text-muted-text">
+                          <span className="text-foreground">{fmtPrice(st.cost)}</span>
+                          <span className="ml-1.5 text-xs text-muted-text/70">/ {fmtPrice(st.lastPrice)}</span>
+                        </td>
+                        <td className="py-2 pl-2 pr-3 text-right text-foreground">
+                          {st.holdDays > 0 ? `${st.holdDays} 天` : '--'}
+                        </td>
+                      </tr>
+                      {isOpen ? (
+                        <tr className="border-b border-border/60 bg-muted/20">
+                          <td colSpan={7} className="px-3 py-3">
                             <LedgerDetail st={st} />
-                          </div>
-                        ) : null}
-                      </td>
-                    </tr>
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+
+      {/* 手机端：卡片（独立容器，不再受表格 min-w 约束，一屏完整无横向滚动） */}
+      <div className="space-y-3 md:hidden">
+        {ledger.map((st) => {
+          const isOpen = expanded === st.symbol;
+          return (
+            <Card key={st.symbol} variant="bordered" padding="none">
+              <div className={cn('px-3 py-2.5', isOpen && 'bg-muted/20')}>
+                <button
+                  type="button"
+                  onClick={() => setExpanded(isOpen ? null : st.symbol)}
+                  className="flex w-full items-center justify-between gap-2 text-left"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className={cn('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-text', isOpen && 'border-transparent text-foreground')}>
+                      {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </span>
+                    <span className="font-medium text-foreground">{st.symbol}</span>
+                    <span className="truncate text-sm text-muted-text">{st.name || '--'}</span>
+                  </span>
+                </button>
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+                  <div className="text-muted-text">
+                    持股 <span className="text-foreground">{fmt(st.quantity)}</span>
+                  </div>
+                  <div className="text-right text-muted-text">
+                    持仓 <span className="text-foreground">{st.holdDays > 0 ? `${st.holdDays} 天` : '--'}</span>
+                  </div>
+                  <div className="col-span-2 text-muted-text">
+                    持有盈亏{' '}
+                    <span className={cn('font-medium', pnlCls(st.holdProfit))}>{fmt(st.holdProfit)}</span>{' '}
+                    <span className={cn('text-xs', pnlCls(st.holdProfit))}>{fmtPct(st.holdRate)}</span>
+                  </div>
+                  <div className="col-span-2 text-muted-text">
+                    成本 <span className="text-foreground">{fmtPrice(st.cost)}</span> / 现价{' '}
+                    <span className="text-foreground">{fmtPrice(st.lastPrice)}</span>
+                  </div>
+                </div>
+              </div>
+              {isOpen ? (
+                <div className="border-t border-border/60 bg-muted/20 px-3 py-3">
+                  <LedgerDetail st={st} />
+                </div>
+              ) : null}
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }

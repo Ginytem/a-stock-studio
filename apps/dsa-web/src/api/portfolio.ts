@@ -315,6 +315,14 @@ export const portfolioApi = {
     return toCamelCase(response.data);
   },
 
+  async getAnnualStatement(year: number | string, query: { accountId?: number; costMethod?: PortfolioCostMethod; useThs?: boolean } = {}): Promise<Record<string, unknown>> {
+    const params: Record<string, string | number> = { year, cost_method: query.costMethod ?? 'fifo' };
+    if (query.accountId != null) params.account_id = query.accountId;
+    if (query.useThs != null) params.use_ths = query.useThs ? 'true' : 'false';
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/statement/annual', { params });
+    return toCamelCase(response.data);
+  },
+
   async getEquityCurve(query: { days?: number; accountId?: number; costMethod?: PortfolioCostMethod } = {}): Promise<Record<string, unknown>> {
     const params: Record<string, string | number> = { days: query.days ?? 180, cost_method: query.costMethod ?? 'fifo' };
     if (query.accountId != null) params.account_id = query.accountId;

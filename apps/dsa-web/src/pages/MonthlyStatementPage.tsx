@@ -18,11 +18,26 @@ import { cn } from '../utils/cn';
 type TradeDetail = {
   date: string;
   symbol: string;
+  name?: string;
   side: 'buy' | 'sell';
   quantity: number;
   price: number;
   amount: number;
   fee: number;
+};
+
+type AnnualMonthRow = {
+  month: string;
+  buyAmount?: number;
+  sellAmount?: number;
+  cashNet?: number;
+  dividendCount?: number;
+  returnPct?: number | null;
+};
+
+type AnnualData = StatementData & {
+  year?: string;
+  months?: AnnualMonthRow[];
 };
 
 type StatementData = {
@@ -631,16 +646,295 @@ function MonthlyView() {
   );
 }
 
+function AnnualView() {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [useThs, setUseThs] = useState(true);
+  const [data, setData] = useState<AnnualData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<ParsedApiError | null>(null);
+
+  const load = useCallback(async (target: string) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await portfolioApi.getAnnualStatement(target, { costMethod: 'fifo', useThs });
+      setData(result as AnnualData);
+    } catch (err) {
+      setError({ title: '加载失败', message: '加载年度对账单失败', rawMessage: String(err), category: 'unknown' });
+      setData(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [useThs]);
+
+  useEffect(() => {
+    void load(year);
+  }, [load, year]);
+
+  const trades = data?.trades ?? {};
+  const cash = data?.cash ?? {};
+  const dividends = data?.dividends ?? {};
+  const asset = data?.asset ?? {};
+  const details = data?.details ?? [];
+  const months = data?.months ?? [];
+  const retPct = asset.returnPct;
+  const retColor = retPct === null || retPct === undefined || retPct === 0 ? 'text-foreground' : retPct > 0 ? 'text-[#0a8f5c]' : 'text-[#e04545]';
+
+  return (
+    <div className="space-y-4">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
+          <CalendarDays className="h-4 w-4 text-muted-text" />
+          <input
+            type="number"
+            min={2000}
+            max={2100}
+            value={year}
+            onChange={(e) => e.target.value && setYear(e.target.value)}
+            className="w-24 bg-transparent text-sm text-foreground outline-none"
+          />
+          <span className="text-xs text-muted-text">年</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setUseThs((v) => !v)}
+          className={cn(
+            'inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors',
+            useThs
+              ? 'border-primary/40 bg-primary/10 text-foreground'
+              : 'border-border bg-card text-muted-text hover:text-foreground',
+          )}
+        >
+          <span
+            className={cn(
+              'relative inline-flex h-4 w-7 items-center rounded-full transition-colors',
+              useThs ? 'bg-primary' : 'bg-border',
+            )}
+          >
+            <span
+              className={cn(
+                'inline-block h-3 w-3 transform rounded-full bg-white transition-transform',
+                useThs ? 'translate-x-3.5' : 'translate-x-0.5',
+              )}
+            />
+          </span>
+          使用同花顺交易数据（含国债逆回购）
+        </button>
+        {data?.source === 'ths' ? (
+          <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600 dark:text-emerald-400">
+            数据来源：同花顺
+          </span>
+        ) : null}
+        {isLoading ? <span className="text-xs text-muted-text">加载中…</span> : null}
+      </div>
+
+      {error ? (
+        <ApiErrorAlert error={error} actionLabel="重试" onAction={() => void load(year)} dismissLabel="关闭" onDismiss={() => setError(null)} />
+      ) : null}
+
+      {!isLoading && !error && !data ? (
+        <Card variant="bordered" padding="lg">
+          <EmptyState
+            title="暂无年度对账单数据"
+            description="当前年份没有交易、资金或分红流水。请先录入交易或切换年份。"
+          />
+        </Card>
+      ) : null}
+
+      {data ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="年度买入"
+              value={`${trades.buyCount ?? 0} 笔 · ¥${fmt(trades.buyAmount)}`}
+              icon={<ArrowDownCircle className="h-4 w-4 text-[#e04545]" />}
+            />
+            <StatCard
+              label="年度卖出"
+              value={`${trades.sellCount ?? 0} 笔 · ¥${fmt(trades.sellAmount)}`}
+              icon={<ArrowUpCircle className="h-4 w-4 text-[#0a8f5c]" />}
+            />
+            <StatCard
+              label="资金净流入"
+              value={`¥${fmtSigned(cash.net)}`}
+              icon={<Banknote className="h-4 w-4 text-muted-text" />}
+            />
+            <StatCard
+              label="现金分红"
+              value={`${dividends.count ?? 0} 笔`}
+              icon={<Coins className="h-4 w-4 text-muted-text" />}
+            />
+          </div>
+
+          <Card variant="bordered" padding="md">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-foreground">年度收益</h2>
+              <span className={`text-lg font-semibold ${retColor}`}>
+                {retPct === null || retPct === undefined ? '年收益率 --' : `年收益率 ${fmtSigned(retPct)}%`}
+              </span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-lg bg-base/60 p-3">
+                <p className="text-xs text-muted-text">期初总资产（1 月初）</p>
+                <p className="mt-1 font-medium text-foreground">¥{fmt(asset.beginEquity)}</p>
+              </div>
+              <div className="rounded-lg bg-base/60 p-3">
+                <p className="text-xs text-muted-text">期末总资产（12 月末）</p>
+                <p className="mt-1 font-medium text-foreground">¥{fmt(asset.endEquity)}</p>
+              </div>
+            </div>
+            {!asset.beginEquity && !asset.endEquity ? (
+              <p className="mt-3 text-xs text-muted-text">
+                提示：期初/期末资产来自每日快照，若年初或年末没有快照记录则显示 --。
+              </p>
+            ) : null}
+          </Card>
+
+          <Card variant="bordered" padding="md">
+            <h2 className="mb-3 text-sm font-semibold text-foreground">交易与费用</h2>
+            <div className="grid grid-cols-2 gap-3 text-sm lg:grid-cols-4">
+              <div className="rounded-lg bg-base/60 p-3">
+                <p className="text-xs text-muted-text">买入金额</p>
+                <p className="mt-1 font-medium text-foreground">¥{fmt(trades.buyAmount)}</p>
+                <p className="text-xs text-muted-text">手续费/税费 ¥{fmt(trades.buyFee)}</p>
+              </div>
+              <div className="rounded-lg bg-base/60 p-3">
+                <p className="text-xs text-muted-text">卖出金额</p>
+                <p className="mt-1 font-medium text-foreground">¥{fmt(trades.sellAmount)}</p>
+                <p className="text-xs text-muted-text">手续费/税费 ¥{fmt(trades.sellFee)}</p>
+              </div>
+              <div className="rounded-lg bg-base/60 p-3">
+                <p className="text-xs text-muted-text">资金流入</p>
+                <p className="mt-1 font-medium text-[#0a8f5c]">¥{fmt(cash.inflow)}</p>
+              </div>
+              <div className="rounded-lg bg-base/60 p-3">
+                <p className="text-xs text-muted-text">资金流出</p>
+                <p className="mt-1 font-medium text-[#e04545]">¥{fmt(cash.outflow)}</p>
+              </div>
+            </div>
+          </Card>
+
+          {months.length ? (
+            <Card variant="bordered" padding="md">
+              <h2 className="mb-3 text-sm font-semibold text-foreground">月度明细</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-xs text-muted-text">
+                      <th className="py-2 pr-3 font-normal">月份</th>
+                      <th className="py-2 pr-3 text-right font-normal">买入金额</th>
+                      <th className="py-2 pr-3 text-right font-normal">卖出金额</th>
+                      <th className="py-2 pr-3 text-right font-normal">净流入</th>
+                      <th className="py-2 pr-3 text-right font-normal">分红</th>
+                      <th className="py-2 text-right font-normal">月收益率</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {months.map((m) => (
+                      <tr key={m.month} className="border-b border-border/50 last:border-0">
+                        <td className="py-2 pr-3 text-foreground">{m.month}</td>
+                        <td className="py-2 pr-3 text-right text-foreground">¥{fmt(m.buyAmount)}</td>
+                        <td className="py-2 pr-3 text-right text-foreground">¥{fmt(m.sellAmount)}</td>
+                        <td className="py-2 pr-3 text-right text-foreground">¥{fmtSigned(m.cashNet)}</td>
+                        <td className="py-2 pr-3 text-right text-foreground">{m.dividendCount ?? 0} 笔</td>
+                        <td className="py-2 text-right font-medium text-foreground">
+                          {m.returnPct === null || m.returnPct === undefined ? '--' : `${fmtSigned(m.returnPct)}%`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          ) : null}
+
+          {dividends.count ? (
+            <Card variant="bordered" padding="md">
+              <h2 className="mb-3 text-sm font-semibold text-foreground">分红明细（全年）</h2>
+              <div className="space-y-1.5 text-sm">
+                {(dividends.items ?? []).map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between rounded-lg bg-base/60 px-3 py-2">
+                    <span className="text-foreground">
+                      {item.symbol}
+                      {item.name ? <span className="ml-1 text-xs text-muted-text">{item.name}</span> : null}
+                    </span>
+                    <span className="text-xs text-muted-text">{item.date}</span>
+                    <span
+                      className={
+                        'font-medium ' +
+                        (item.type === '除权调整' ? 'text-[#e04545]' : 'text-[#0a8f5c]')
+                      }
+                    >
+                      {item.type ? `${item.type} ` : ''}
+                      {item.amount >= 0 ? '+' : ''}¥{fmt(Math.abs(item.amount))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ) : null}
+
+          {details.length ? (
+            <Card variant="bordered" padding="md">
+              <h2 className="mb-3 text-sm font-semibold text-foreground">交易明细（全年）</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-xs text-muted-text">
+                      <th className="py-2 pr-3 font-normal">日期</th>
+                      <th className="py-2 pr-3 font-normal">代码</th>
+                      <th className="py-2 pr-3 font-normal">名称</th>
+                      <th className="py-2 pr-3 text-right font-normal">方向</th>
+                      <th className="py-2 pr-3 text-right font-normal">数量</th>
+                      <th className="py-2 pr-3 text-right font-normal">价格</th>
+                      <th className="py-2 pr-3 text-right font-normal">金额</th>
+                      <th className="py-2 text-right font-normal">费用</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {details.map((row, idx) => (
+                      <tr key={idx} className="border-b border-border/50 last:border-0">
+                        <td className="py-2 pr-3 whitespace-nowrap text-muted-text">{row.date}</td>
+                        <td className="py-2 pr-3 text-foreground">{row.symbol}</td>
+                        <td className="py-2 pr-3 text-muted-text">{row.name ?? ''}</td>
+                        <td className="py-2 pr-3 text-right">
+                          <span
+                            className={
+                              'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ' +
+                              (row.side === 'buy' ? 'bg-[#e04545]/10 text-[#e04545]' : 'bg-[#0a8f5c]/10 text-[#0a8f5c]')
+                            }
+                          >
+                            {row.side === 'buy' ? '买入' : '卖出'}
+                          </span>
+                        </td>
+                        <td className="py-2 pr-3 text-right text-foreground">{fmt(row.quantity)}</td>
+                        <td className="py-2 pr-3 text-right text-foreground">{fmtPrice(row.price)}</td>
+                        <td className="py-2 pr-3 text-right font-medium text-foreground">¥{fmt(row.amount)}</td>
+                        <td className="py-2 text-right text-muted-text">¥{fmt(row.fee)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 // ---------------- 页面入口 ---------------- //
+
 export const MonthlyStatementPage: React.FC = () => {
-  const [tab, setTab] = useState<'ledger' | 'monthly'>('ledger');
+  const [tab, setTab] = useState<'ledger' | 'monthly' | 'annual'>('ledger');
 
   return (
     <AppPage>
       <PageHeader
         eyebrow="Portfolio"
         title="对账单"
-        description="个股流水：按股票查看完整交易、分红与税费明细；月度对账单：按月聚合买卖与资金流水"
+        description="个股流水：按股票查看完整交易、分红与税费明细；月度/年度对账单：按月或按年聚合买卖与资金流水"
       />
 
       <div className="mb-4 flex items-center gap-1 rounded-xl border border-border bg-card p-1">
@@ -666,9 +960,20 @@ export const MonthlyStatementPage: React.FC = () => {
           <CalendarDays className="h-4 w-4" />
           月度对账单
         </button>
+        <button
+          type="button"
+          onClick={() => setTab('annual')}
+          className={cn(
+            'inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+            tab === 'annual' ? 'bg-primary text-primary-foreground' : 'text-muted-text hover:text-foreground',
+          )}
+        >
+          <Coins className="h-4 w-4" />
+          年度对账单
+        </button>
       </div>
 
-      {tab === 'ledger' ? <StockLedgerView /> : <MonthlyView />}
+      {tab === 'ledger' ? <StockLedgerView /> : tab === 'monthly' ? <MonthlyView /> : <AnnualView />}
     </AppPage>
   );
 };

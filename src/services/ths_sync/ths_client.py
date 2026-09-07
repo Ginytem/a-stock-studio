@@ -65,7 +65,24 @@ class ThsSession:
     def _save_cookies(self) -> None:
         if self.session is None:
             return
-        cookies = {c.name: c.value for c in self.session.cookies}
+        jar = self.session.cookies
+        cookies: Dict[str, str] = {}
+        try:
+            for c in jar:
+                if isinstance(c, str):
+                    # curl_cffi Cookies 迭代时可能直接产出 name 字符串
+                    val = jar[c]
+                    if not isinstance(val, str):
+                        continue
+                    cookies[c] = val
+                else:
+                    name = getattr(c, "name", None)
+                    if name:
+                        cookies[str(name)] = str(getattr(c, "value", "") or "")
+        except TypeError:
+            pass
+        if not cookies:
+            return
         with open(self.cookie_file, "w", encoding="utf-8") as f:
             json.dump(cookies, f, ensure_ascii=False, indent=2)
 
@@ -121,6 +138,12 @@ class ThsSession:
             status = int(data.get("status") or 0)
             # status: 0=需重新取码 1/2=等待 3=登录成功
             if status == 3:
+                # 登录成功后需访问账本域页面，触发服务端补种 u_ukey/u_did 等账本接口必需 cookie
+                for url in (BASE_TZZB + "/", BASE_TZZB + "/pc/index.html", BASE_UPASS + "/"):
+                    try:
+                        s.get(url, timeout=12)
+                    except Exception:  # noqa: BLE001
+                        continue
                 self._save_cookies()
                 return True
             if status == 0:

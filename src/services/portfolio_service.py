@@ -1375,6 +1375,77 @@ class PortfolioService:
             "details": sorted(details, key=lambda d: d["date"]),
         }
 
+    def build_annual_statement(
+        self,
+        *,
+        year: int,
+        account_id: Optional[int] = None,
+        cost_method: str = "fifo",
+    ) -> Dict[str, Any]:
+        """年度对账单：循环 12 个月复用 build_monthly_statement 聚合，返回全年汇总 + 月度明细。"""
+        buy_count = 0
+        buy_amount = 0.0
+        buy_fee = 0.0
+        sell_count = 0
+        sell_amount = 0.0
+        sell_fee = 0.0
+        cash_in = 0.0
+        cash_out = 0.0
+        details: List[Dict[str, Any]] = []
+        dividends: List[Dict[str, Any]] = []
+        months: List[Dict[str, Any]] = []
+        begin_equity: Optional[float] = None
+        end_equity: Optional[float] = None
+        for m in range(1, 13):
+            month_key = f"{year}-{m:02d}"
+            st = self.build_monthly_statement(month=month_key, account_id=account_id, cost_method=cost_method)
+            t = st.get("trades") or {}
+            c = st.get("cash") or {}
+            d = st.get("dividends") or {}
+            a = st.get("asset") or {}
+            buy_count += int(t.get("buy_count") or 0)
+            buy_amount += float(t.get("buy_amount") or 0)
+            buy_fee += float(t.get("buy_fee") or 0)
+            sell_count += int(t.get("sell_count") or 0)
+            sell_amount += float(t.get("sell_amount") or 0)
+            sell_fee += float(t.get("sell_fee") or 0)
+            cash_in += float(c.get("inflow") or 0)
+            cash_out += float(c.get("outflow") or 0)
+            details.extend(st.get("details") or [])
+            dividends.extend(d.get("items") or [])
+            if m == 1:
+                begin_equity = a.get("begin_equity")
+            if a.get("end_equity") is not None:
+                end_equity = a.get("end_equity")
+            months.append({
+                "month": month_key,
+                "buy_amount": round(float(t.get("buy_amount") or 0), 2),
+                "sell_amount": round(float(t.get("sell_amount") or 0), 2),
+                "cash_net": round(float(c.get("inflow") or 0) - float(c.get("outflow") or 0), 2),
+                "dividend_count": int(d.get("count") or 0),
+                "return_pct": a.get("return_pct"),
+            })
+        ret_pct = None
+        if begin_equity and begin_equity != 0 and end_equity is not None:
+            ret_pct = round((end_equity - begin_equity) / begin_equity * 100, 2)
+        return {
+            "year": str(year),
+            "trades": {
+                "buy_count": buy_count,
+                "buy_amount": round(buy_amount, 2),
+                "buy_fee": round(buy_fee, 2),
+                "sell_count": sell_count,
+                "sell_amount": round(sell_amount, 2),
+                "sell_fee": round(sell_fee, 2),
+                "net_cash_outflow": round(buy_amount + buy_fee - sell_amount, 2),
+            },
+            "cash": {"inflow": round(cash_in, 2), "outflow": round(cash_out, 2), "net": round(cash_in - cash_out, 2)},
+            "dividends": {"count": len(dividends), "items": dividends},
+            "asset": {"begin_equity": begin_equity, "end_equity": end_equity, "return_pct": ret_pct},
+            "details": sorted(details, key=lambda d: d["date"]),
+            "months": months,
+        }
+
     def build_equity_curve(
         self,
         *,

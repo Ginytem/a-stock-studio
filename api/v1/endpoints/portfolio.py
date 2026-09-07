@@ -479,6 +479,45 @@ def get_monthly_statement(
 
 
 @router.get(
+    "/statement/annual",
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="年度对账单",
+    description="按年份聚合买入/卖出/资金流水/分红，给出期初期末资产与年度收益率，附 1-12 月月度明细",
+)
+def get_annual_statement(
+    year: int = Query(..., description="年份 YYYY"),
+    account_id: Optional[int] = Query(None, description="账户 ID，缺省为全部账户"),
+    cost_method: str = Query("fifo", description="成本口径 fifo/avg"),
+    use_ths: bool = Query(False, description="使用同花顺账本交易数据生成对账单（含国债逆回购等全部流水）"),
+) -> dict:
+    if use_ths:
+        from src.services.ths_sync.ths_client import ThsLoginError
+        from src.services.ths_sync.ths_sync_service import ThsSyncService
+
+        try:
+            return ThsSyncService().build_annual_statement(
+                year=year, account_id=account_id, cost_method=cost_method
+            )
+        except ThsLoginError as exc:
+            raise api_error(400, "ths_login_error", str(exc))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _internal_error("Build THS annual statement failed", exc)
+    service = PortfolioService()
+    try:
+        return service.build_annual_statement(
+            year=year,
+            account_id=account_id,
+            cost_method=cost_method,
+        )
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Build annual statement failed", exc)
+
+
+@router.get(
     "/equity-curve",
     responses={500: {"model": ErrorResponse}},
     summary="资产曲线",

@@ -412,6 +412,7 @@ function MonthlyView() {
   const [month, setMonth] = useState(currentMonth());
   const [useThs, setUseThs] = useState(true);
   const [data, setData] = useState<StatementData | null>(null);
+  const [divMode, setDivMode] = useState<'amount' | 'count'>('amount');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<ParsedApiError | null>(null);
 
@@ -436,6 +437,7 @@ function MonthlyView() {
   const trades = data?.trades ?? {};
   const cash = data?.cash ?? {};
   const dividends = data?.dividends ?? {};
+  const divTotal = (dividends.items ?? []).reduce((s, it) => s + (Number(it.amount) || 0), 0);
   const asset = data?.asset ?? {};
   const details = data?.details ?? [];
   const retPct = asset.returnPct;
@@ -520,7 +522,16 @@ function MonthlyView() {
             />
             <StatCard
               label="现金分红"
-              value={`${dividends.count ?? 0} 笔`}
+              value={divMode === 'amount' ? `¥${fmt(divTotal)}` : `${dividends.count ?? 0} 笔`}
+              hint={
+                <button
+                  type="button"
+                  onClick={() => setDivMode((m) => (m === 'amount' ? 'count' : 'amount'))}
+                  className="mt-1 inline-flex items-center rounded-full border border-border bg-base/60 px-2 py-0.5 text-xs text-muted-text transition-colors hover:text-foreground"
+                >
+                  {divMode === 'amount' ? '切换为笔数' : '切换为金额'}
+                </button>
+              }
               icon={<Coins className="h-4 w-4 text-muted-text" />}
             />
           </div>
@@ -578,7 +589,7 @@ function MonthlyView() {
           {/* 分红明细 */}
           {dividends.count ? (
             <Card variant="bordered" padding="md">
-              <h2 className="mb-3 text-sm font-semibold text-foreground">分红明细</h2>
+              <h2 className="mb-3 text-sm font-semibold text-foreground">分红明细<span className="ml-2 text-xs font-normal text-muted-text">合计：{divMode === 'amount' ? `¥${fmt(divTotal)}` : `${dividends.count ?? 0} 笔`}</span></h2>
               <div className="space-y-1.5 text-sm">
                 {(dividends.items ?? []).map((item, idx) => (
                   <div key={idx} className="flex items-center justify-between rounded-lg bg-base/60 px-3 py-2">
@@ -650,6 +661,7 @@ function AnnualView() {
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [useThs, setUseThs] = useState(true);
   const [data, setData] = useState<AnnualData | null>(null);
+  const [divMode, setDivMode] = useState<'amount' | 'count'>('amount');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<ParsedApiError | null>(null);
 
@@ -674,6 +686,7 @@ function AnnualView() {
   const trades = data?.trades ?? {};
   const cash = data?.cash ?? {};
   const dividends = data?.dividends ?? {};
+  const divTotal = (dividends.items ?? []).reduce((s, it) => s + (Number(it.amount) || 0), 0);
   const asset = data?.asset ?? {};
   const details = data?.details ?? [];
   const months = data?.months ?? [];
@@ -761,7 +774,16 @@ function AnnualView() {
             />
             <StatCard
               label="现金分红"
-              value={`${dividends.count ?? 0} 笔`}
+              value={divMode === 'amount' ? `¥${fmt(divTotal)}` : `${dividends.count ?? 0} 笔`}
+              hint={
+                <button
+                  type="button"
+                  onClick={() => setDivMode((m) => (m === 'amount' ? 'count' : 'amount'))}
+                  className="mt-1 inline-flex items-center rounded-full border border-border bg-base/60 px-2 py-0.5 text-xs text-muted-text transition-colors hover:text-foreground"
+                >
+                  {divMode === 'amount' ? '切换为笔数' : '切换为金额'}
+                </button>
+              }
               icon={<Coins className="h-4 w-4 text-muted-text" />}
             />
           </div>
@@ -850,7 +872,7 @@ function AnnualView() {
 
           {dividends.count ? (
             <Card variant="bordered" padding="md">
-              <h2 className="mb-3 text-sm font-semibold text-foreground">分红明细（全年）</h2>
+              <h2 className="mb-3 text-sm font-semibold text-foreground">分红明细（全年）<span className="ml-2 text-xs font-normal text-muted-text">合计：{divMode === 'amount' ? `¥${fmt(divTotal)}` : `${dividends.count ?? 0} 笔`}</span></h2>
               <div className="space-y-1.5 text-sm">
                 {(dividends.items ?? []).map((item, idx) => (
                   <div key={idx} className="flex items-center justify-between rounded-lg bg-base/60 px-3 py-2">

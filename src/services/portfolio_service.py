@@ -2143,7 +2143,11 @@ class PortfolioService:
             # 跨阶段强制失效：盘中拉的价格不能复用于非盘中（收盘后必须重拉当日收盘价），
             # 反之非盘中（收盘价）也不应在次日盘中继续复用（盘中价格会变动）。
             phase_mismatch = cached_intraday is not None and cached_intraday != intraday_now
-            if (now - cached_ts < ttl) and not phase_mismatch:
+            # 跨交易日强制失效：除权除息日/新交易日复用前一日缓存价会显示错误价格
+            # （例：除息日复用除息前收盘价），因此缓存仅限当日有效。
+            cached_date = datetime.fromtimestamp(cached_ts).date()
+            same_trade_date = cached_date == datetime.now().date()
+            if (now - cached_ts < ttl) and not phase_mismatch and same_trade_date:
                 return cached[1], cached[2]
         try:
             from data_provider.base import DataFetcherManager
@@ -2216,6 +2220,9 @@ class PortfolioService:
             return None
         ts, change_pct = entry
         if time.time() - ts > _REALTIME_PRICE_CACHE_TTL_SECONDS * 10:
+            return None
+        # 跨交易日强制失效：避免除息日/新交易日复用前一日涨跌幅
+        if datetime.fromtimestamp(ts).date() != datetime.now().date():
             return None
         return change_pct
 

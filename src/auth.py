@@ -38,7 +38,7 @@ TOTP_ISSUER = "SEA"
 TOTP_ACCOUNT = "admin"
 TOTP_VALID_WINDOW = 1
 PUBLIC_HOST_SUFFIX_ENV = "PUBLIC_HOST_SUFFIX"
-PUBLIC_HOST_SUFFIX_DEFAULT = "dpdns.org"
+PUBLIC_HOST_SUFFIX_DEFAULT = "ginytem.com"
 
 # Lazy-loaded state
 _auth_enabled: Optional[bool] = None
@@ -576,7 +576,7 @@ def verify_totp(code: str, secret: str | None = None) -> bool:
 def is_public_host(request) -> bool:
     """Whether the request arrived through the public host (Host header contains marker).
 
-    公网域名通过 Cloudflare 隧道访问时 Host 为 seajn.dpdns.org；
+    公网域名通过 Cloudflare 隧道访问时 Host 为 sea.ginytem.com（后缀 ginytem.com）；
     本机 / 局域网直连时 Host 为 127.0.0.1 / localhost / 局域网 IP，不命中 marker。
     """
     host = request.headers.get("host", "") or ""

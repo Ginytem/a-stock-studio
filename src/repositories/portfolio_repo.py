@@ -1256,6 +1256,46 @@ class PortfolioRepository:
         valuation_currency: str,
     ) -> None:
         """Atomically refresh position cache and daily snapshot in one transaction."""
+        # ---- 防呆：拒绝写入明显异常的日快照（2026-09 中秋休市脏数据事故修复） ----
+        # 1) 软校验：确认休市日（节假日/周末，券商维护致账本数据不可信）→ 跳过写入
+        try:
+            from src.core.trading_calendar import is_market_open
+
+            if not is_market_open("cn", snapshot_date):
+                logger.warning(
+                    "snapshot guard: %s 非A股交易日，跳过日快照写入 (acct=%s)",
+                    snapshot_date,
+                    account_id,
+                )
+                return
+        except Exception:  # noqa: BLE001 fail-open：交易日历不可用时放行，由下方硬校验兜底
+            pass
+        # 2) 硬校验：持仓为空且权益相对最近历史快照跳变 >50% → 视为抓取异常（空持仓+现金残值），拒绝写入
+        positions_list = list(positions) if positions is not None else []
+        if not positions_list and total_equity > 0:
+            with self.db.get_session() as session:
+                prev_equity = session.execute(
+                    select(PortfolioDailySnapshot.total_equity)
+                    .where(
+                        PortfolioDailySnapshot.account_id == account_id,
+                        PortfolioDailySnapshot.cost_method == cost_method,
+                        PortfolioDailySnapshot.snapshot_date < snapshot_date,
+                    )
+                    .order_by(desc(PortfolioDailySnapshot.snapshot_date))
+                    .limit(1)
+                ).scalar_one_or_none()
+            if prev_equity is not None and prev_equity > 0:
+                change = abs(total_equity - prev_equity) / prev_equity
+                if change > 0.5:
+                    logger.warning(
+                        "snapshot guard: %s 持仓为空且权益跳变 %.1f%% (prev=%.2f, new=%.2f)，跳过写入 (acct=%s)",
+                        snapshot_date,
+                        change * 100,
+                        prev_equity,
+                        total_equity,
+                        account_id,
+                    )
+                    return
         with self.db.get_session() as session:
             session.execute(
                 delete(PortfolioPosition).where(

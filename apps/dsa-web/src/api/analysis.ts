@@ -223,12 +223,13 @@ export const analysisApi = {
     };
   },
 
-  /** 外部复盘报告详情（含完整 Markdown）。 */
+  /** 外部复盘报告详情（含完整 Markdown 与要点速览）。 */
   getExternalReview: async (id: number): Promise<{
     id: number;
     reportDate: string;
     title: string;
     markdown: string;
+    digest: Record<string, unknown>;
     createdAt: string | null;
   }> => {
     const response = await apiClient.get<Record<string, unknown>>(
@@ -239,6 +240,7 @@ export const analysisApi = {
       reportDate: string;
       title: string;
       markdown: string;
+      digest: Record<string, unknown>;
       createdAt: string | null;
     };
   },

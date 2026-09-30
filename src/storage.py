@@ -2905,11 +2905,19 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             logger.error(f"保存分析历史失败: {e}")
             return 0
 
-    def save_external_review(self, report_date: str, title: str, markdown: str) -> int:
+    def save_external_review(
+        self,
+        report_date: str,
+        title: str,
+        markdown: str,
+        digest: Optional[Dict[str, Any]] = None,
+        summary_text: Optional[str] = None,
+    ) -> int:
         """
         保存外部导入的账户级复盘报告（report_type=external_review）。
 
-        复用 analysis_history 表：code 用账户占位 'ACCOUNT'，正文与元信息存 raw_result JSON。
+        复用 analysis_history 表：code 用账户占位 'ACCOUNT'，正文（已清洗的精简版）与
+        要点速览存 raw_result JSON；analysis_summary 存一句话摘要。
         Returns:
             新记录的 AnalysisHistory.id；失败返回 0。
         """
@@ -2921,6 +2929,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             "title": title,
             "markdown": markdown,
         }
+        if digest:
+            payload["digest"] = digest
         try:
             def _write(session: Session) -> int:
                 history = AnalysisHistory(
@@ -2931,7 +2941,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     sentiment_score=None,
                     operation_advice=None,
                     trend_prediction=None,
-                    analysis_summary=markdown.strip()[:500],
+                    analysis_summary=(summary_text or markdown.strip()[:500]),
                     raw_result=self._safe_json_dumps(payload),
                     news_content=None,
                     context_snapshot=None,

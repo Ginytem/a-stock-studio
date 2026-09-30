@@ -1,17 +1,19 @@
 import type React from 'react';
-import Markdown from 'react-markdown';
+import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 interface ReportMarkdownBodyProps {
   content: string;
   className?: string;
   testId?: string;
+  components?: Components;
 }
 
 export const ReportMarkdownBody: React.FC<ReportMarkdownBodyProps> = ({
   content,
   className = '',
   testId,
+  components,
 }) => (
   <div
     data-testid={testId}
@@ -33,7 +35,7 @@ export const ReportMarkdownBody: React.FC<ReportMarkdownBodyProps> = ({
       ${className}
     `}
   >
-    <Markdown remarkPlugins={[remarkGfm]}>
+    <Markdown remarkPlugins={[remarkGfm]} components={components}>
       {content}
     </Markdown>
   </div>

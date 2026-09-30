@@ -242,6 +242,12 @@ export const thsApi = {
     apiClient
       .post<AiExportTokenResult>(`/api/v1/ths/ai-export/token?ttl_hours=${ttlHours}`, null, { timeout: 60000 })
       .then((r) => toCamelCase<AiExportTokenResult>(r.data)),
+  getAiExport: (days = 90, curveDays = 180) =>
+    apiClient
+      .get<unknown>(`/api/v1/ths/ai-export?format=json&days=${days}&curve_days=${curveDays}`, {
+        timeout: LONG_TIMEOUT,
+      })
+      .then((r) => r.data),
 };
 
 // ---------- 账本导出文件（汇总持仓.xlsx）同步 ----------

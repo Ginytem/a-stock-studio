@@ -52,6 +52,9 @@ export const ThsSyncPage: React.FC = () => {
   const [aiTokenLoading, setAiTokenLoading] = useState(false);
   const [aiTtlHours, setAiTtlHours] = useState(1);
   const [aiCopied, setAiCopied] = useState(false);
+  const [jsonLoading, setJsonLoading] = useState(false);
+  const [jsonCopied, setJsonCopied] = useState(false);
+  const [jsonInfo, setJsonInfo] = useState<string | null>(null);
 
   const generateAiToken = useCallback(async () => {
     setAiTokenLoading(true);
@@ -77,6 +80,24 @@ export const ThsSyncPage: React.FC = () => {
       /* 剪贴板不可用时忽略 */
     }
   }, [aiToken]);
+
+  const copyAiJson = useCallback(async () => {
+    setJsonLoading(true);
+    setError(null);
+    setJsonInfo(null);
+    try {
+      const data = await thsApi.getAiExport(90, 180);
+      const text = JSON.stringify(data, null, 2);
+      await navigator.clipboard.writeText(text);
+      setJsonCopied(true);
+      setJsonInfo(`已复制 ${text.length.toLocaleString('zh-CN')} 字符，直接粘贴给 AI`);
+      window.setTimeout(() => setJsonCopied(false), 2500);
+    } catch (err) {
+      setError({ title: '获取数据失败', message: String(err), rawMessage: String(err), category: 'unknown' });
+    } finally {
+      setJsonLoading(false);
+    }
+  }, []);
 
   const [reconcile, setReconcile] = useState<ThsReconcileResult | null>(null);
   const [reconcileLoading, setReconcileLoading] = useState(false);
@@ -664,15 +685,32 @@ export const ThsSyncPage: React.FC = () => {
                 <div className="mb-3 flex items-center gap-2">
                   <Link2 className="h-5 w-5 text-[hsl(var(--primary))]" />
                   <div>
-                    <h3 className="text-base font-semibold text-foreground">AI 数据分享链接</h3>
+                    <h3 className="text-base font-semibold text-foreground">AI 数据分享</h3>
                     <p className="mt-0.5 text-sm text-secondary-text">
-                      生成一次性链接发给你的 AI，AI 可直接读取账户总览、持仓、交易流水与资产曲线（无需登录）
+                      两种方式给 AI 提供数据：①复制 JSON 直接粘贴给 AI；②生成一次性链接让 AI 访问（无需登录）
                     </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn-primary text-sm"
+                    disabled={jsonLoading}
+                    onClick={() => void copyAiJson()}
+                  >
+                    {jsonLoading ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Copy className="mr-1.5 h-4 w-4" />
+                    )}
+                    {jsonLoading ? '打包中…' : jsonCopied ? '已复制' : '复制 JSON 数据给 AI'}
+                  </button>
+                  <span className="text-xs text-secondary-text">推荐：AI 访问不了链接时，用这个直接把数据粘贴过去</span>
+                </div>
+                {jsonInfo && <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">{jsonInfo}</p>}
+                <div className="mt-4 flex flex-wrap items-center gap-2">
                   <label className="flex items-center gap-2 text-sm text-secondary-text">
-                    有效期
+                    链接有效期
                     <select
                       className="input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 text-sm"
                       value={aiTtlHours}
@@ -687,7 +725,7 @@ export const ThsSyncPage: React.FC = () => {
                   </label>
                   <button
                     type="button"
-                    className="btn-primary text-sm"
+                    className="btn-secondary text-sm"
                     disabled={aiTokenLoading}
                     onClick={() => void generateAiToken()}
                   >

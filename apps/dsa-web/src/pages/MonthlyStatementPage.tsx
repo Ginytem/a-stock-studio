@@ -7,12 +7,17 @@ import {
   ChevronDown,
   ChevronUp,
   Coins,
+  FileText,
+  Loader2,
   ReceiptText,
+  Trash2,
 } from 'lucide-react';
 import { portfolioApi } from '../api/portfolio';
+import { analysisApi } from '../api/analysis';
 import { thsApi, type ThsHoldingLedgerItem, type ThsStockLedgerItem } from '../api/thsSync';
 import type { ParsedApiError } from '../api/error';
 import { ApiErrorAlert, AppPage, Card, EmptyState, PageHeader, StatCard } from '../components/common';
+import { ReportMarkdownBody } from '../components/report/ReportMarkdownBody';
 import { cn } from '../utils/cn';
 
 type TradeDetail = {
@@ -946,10 +951,204 @@ function AnnualView() {
   );
 }
 
+// ---------------- 复盘报告（外部 AI 回填） ---------------- //
+type ExternalReviewItem = {
+  id: number;
+  reportDate: string;
+  title: string;
+  summary: string;
+  createdAt: string | null;
+};
+
+function ExternalReviewView() {
+  const [reports, setReports] = useState<ExternalReviewItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [title, setTitle] = useState('');
+  const [markdown, setMarkdown] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<{ title: string; reportDate: string; markdown: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await analysisApi.listExternalReviews(1, 100);
+      setReports(res.items ?? []);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleImport = useCallback(async () => {
+    if (!markdown.trim()) {
+      setError('请先粘贴复盘报告内容（Markdown / 文本）');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await analysisApi.importExternalReview({ reportDate, title, markdown });
+      setMarkdown('');
+      setTitle('');
+      await load();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  }, [markdown, title, reportDate, load]);
+
+  const handleOpen = useCallback(async (id: number) => {
+    if (openId === id) {
+      setOpenId(null);
+      setDetail(null);
+      return;
+    }
+    setOpenId(id);
+    setDetail(null);
+    try {
+      const d = await analysisApi.getExternalReview(id);
+      setDetail({ title: d.title, reportDate: d.reportDate, markdown: d.markdown });
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [openId]);
+
+  const handleDelete = useCallback(async (id: number) => {
+    if (!window.confirm('确定删除这份复盘报告吗？')) return;
+    try {
+      await analysisApi.deleteExternalReview(id);
+      if (openId === id) {
+        setOpenId(null);
+        setDetail(null);
+      }
+      await load();
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [openId, load]);
+
+  return (
+    <div className="space-y-4">
+      {error ? (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400">
+          {error}
+          <button type="button" className="ml-2 text-xs underline" onClick={() => setError(null)}>关闭</button>
+        </div>
+      ) : null}
+
+      {/* 导入表单 */}
+      <Card variant="bordered" padding="md">
+        <h2 className="mb-3 text-sm font-semibold text-foreground">导入复盘报告</h2>
+        <p className="mb-3 text-xs text-muted-text">
+          将外部 AI 按复盘协议生成的 Markdown 报告粘贴到这里回填保存；与内置个股分析历史互不干扰。
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-muted-text">
+            复盘日期
+            <input
+              type="date"
+              value={reportDate}
+              onChange={(e) => setReportDate(e.target.value)}
+              className="input-surface h-10 rounded-xl border bg-transparent px-3 text-sm"
+            />
+          </label>
+          <input
+            type="text"
+            placeholder="标题（可选，默认 复盘 YYYY-MM-DD）"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="input-surface input-focus-glow min-w-0 flex-1 rounded-xl border bg-transparent px-3 py-2 text-sm"
+          />
+        </div>
+        <textarea
+          placeholder={'粘贴外部 AI 生成的复盘报告内容（支持 Markdown 表格/标题等）…'}
+          value={markdown}
+          onChange={(e) => setMarkdown(e.target.value)}
+          rows={8}
+          className="input-surface input-focus-glow mt-3 block w-full resize-y rounded-xl border bg-transparent px-3 py-2 font-mono text-xs leading-relaxed"
+        />
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-primary text-sm"
+            disabled={saving}
+            onClick={() => void handleImport()}
+          >
+            {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <FileText className="mr-1.5 h-4 w-4" />}
+            {saving ? '保存中…' : '导入保存'}
+          </button>
+          <span className="text-xs text-muted-text">
+            {markdown.trim() ? `当前内容约 ${markdown.trim().length.toLocaleString('zh-CN')} 字符` : '未输入内容'}
+          </span>
+        </div>
+      </Card>
+
+      {/* 报告列表 */}
+      <Card variant="bordered" padding="md">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-foreground">已保存的复盘报告（共 {reports.length} 份）</h2>
+          {loading ? <Loader2 className="h-4 w-4 animate-spin text-muted-text" /> : null}
+        </div>
+        {reports.length === 0 ? (
+          <EmptyState
+            title="暂无复盘报告"
+            description="在上方粘贴外部 AI 生成的复盘报告后点击「导入保存」。"
+          />
+        ) : (
+          <div className="space-y-2">
+            {reports.map((r) => (
+              <div key={r.id} className="rounded-xl border border-border/70 bg-base/50">
+                <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={() => void handleOpen(r.id)}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  >
+                    {openId === r.id ? <ChevronUp className="h-4 w-4 shrink-0 text-muted-text" /> : <ChevronDown className="h-4 w-4 shrink-0 text-muted-text" />}
+                    <span className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-xs text-primary">{r.reportDate}</span>
+                    <span className="truncate text-sm font-medium text-foreground">{r.title || '复盘报告'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete(r.id)}
+                    className="shrink-0 rounded-md border border-border p-1.5 text-muted-text transition-colors hover:border-red-500/40 hover:text-red-500"
+                    title="删除"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {openId === r.id ? (
+                  <div className="border-t border-border/60 px-4 py-3">
+                    <p className="mb-2 text-xs text-muted-text">摘要：{r.summary || '--'}</p>
+                    {detail && detail.title === r.title ? (
+                      <ReportMarkdownBody content={detail.markdown} />
+                    ) : (
+                      <p className="text-xs text-muted-text">加载中…</p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 // ---------------- 页面入口 ---------------- //
 
 export const MonthlyStatementPage: React.FC = () => {
-  const [tab, setTab] = useState<'ledger' | 'monthly' | 'annual'>('ledger');
+  const [tab, setTab] = useState<'ledger' | 'monthly' | 'annual' | 'review'>('ledger');
 
   return (
     <AppPage>
@@ -993,9 +1192,20 @@ export const MonthlyStatementPage: React.FC = () => {
           <Coins className="h-4 w-4" />
           年度对账单
         </button>
+        <button
+          type="button"
+          onClick={() => setTab('review')}
+          className={cn(
+            'inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+            tab === 'review' ? 'bg-primary text-primary-foreground' : 'text-muted-text hover:text-foreground',
+          )}
+        >
+          <FileText className="h-4 w-4" />
+          复盘报告
+        </button>
       </div>
 
-      {tab === 'ledger' ? <StockLedgerView /> : tab === 'monthly' ? <MonthlyView /> : <AnnualView />}
+      {tab === 'ledger' ? <StockLedgerView /> : tab === 'monthly' ? <MonthlyView /> : tab === 'annual' ? <AnnualView /> : <ExternalReviewView />}
     </AppPage>
   );
 };

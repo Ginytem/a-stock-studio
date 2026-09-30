@@ -184,6 +184,72 @@ export const analysisApi = {
     const baseUrl = apiClient.defaults.baseURL || '';
     return `${baseUrl}/api/v1/analysis/tasks/stream`;
   },
+
+  // ============ 外部复盘报告（v1.8 协议 Markdown 回填） ============
+
+  /** 导入外部复盘报告（Markdown 文本回填，账户级）。 */
+  importExternalReview: async (data: { reportDate: string; title: string; markdown: string }): Promise<{
+    id: number;
+    reportDate: string;
+    title: string;
+  }> => {
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/analysis/external-reviews',
+      {
+        report_date: data.reportDate,
+        title: data.title,
+        markdown: data.markdown,
+      }
+    );
+    return toCamelCase(response.data) as { id: number; reportDate: string; title: string };
+  },
+
+  /** 外部复盘报告列表。 */
+  listExternalReviews: async (page = 1, limit = 50): Promise<{
+    total: number;
+    page: number;
+    limit: number;
+    items: Array<{ id: number; reportDate: string; title: string; summary: string; createdAt: string | null }>;
+  }> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      '/api/v1/analysis/external-reviews',
+      { params: { page, limit } }
+    );
+    return toCamelCase(response.data) as {
+      total: number;
+      page: number;
+      limit: number;
+      items: Array<{ id: number; reportDate: string; title: string; summary: string; createdAt: string | null }>;
+    };
+  },
+
+  /** 外部复盘报告详情（含完整 Markdown）。 */
+  getExternalReview: async (id: number): Promise<{
+    id: number;
+    reportDate: string;
+    title: string;
+    markdown: string;
+    createdAt: string | null;
+  }> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/analysis/external-reviews/${id}`
+    );
+    return toCamelCase(response.data) as {
+      id: number;
+      reportDate: string;
+      title: string;
+      markdown: string;
+      createdAt: string | null;
+    };
+  },
+
+  /** 删除外部复盘报告。 */
+  deleteExternalReview: async (id: number): Promise<{ deleted: number }> => {
+    const response = await apiClient.delete<Record<string, unknown>>(
+      `/api/v1/analysis/external-reviews/${id}`
+    );
+    return toCamelCase(response.data) as { deleted: number };
+  },
 };
 
 // ============ Custom Error Classes ============

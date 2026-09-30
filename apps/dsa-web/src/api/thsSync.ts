@@ -141,6 +141,15 @@ export type ThsHoldingLedgerResult = {
   stocks: ThsHoldingLedgerItem[];
 };
 
+// ---------- AI 数据分享链接（一次性令牌） ----------
+export type AiExportTokenResult = {
+  token: string;
+  url: string;
+  expiresAt: string;
+  expiresInSeconds: number;
+  note: string;
+};
+
 export type ThsReconcileResult = {
   available: boolean;
   reason?: string;
@@ -229,6 +238,10 @@ export const thsApi = {
       .get<ThsReconcileResult>('/api/v1/ths/reconcile', { timeout: LONG_TIMEOUT })
       .then((r) => toCamelCase<ThsReconcileResult>(r.data)),
   logout: () => apiClient.post('/api/v1/ths/logout').then((r) => r.data),
+  createAiExportToken: (ttlHours = 1) =>
+    apiClient
+      .post<AiExportTokenResult>(`/api/v1/ths/ai-export/token?ttl_hours=${ttlHours}`, null, { timeout: 60000 })
+      .then((r) => toCamelCase<AiExportTokenResult>(r.data)),
 };
 
 // ---------- 账本导出文件（汇总持仓.xlsx）同步 ----------

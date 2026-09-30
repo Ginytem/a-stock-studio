@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
+  Copy,
   FileSpreadsheet,
   FolderCog,
+  Link2,
   Loader2,
   LogOut,
   QrCode,
@@ -13,6 +16,7 @@ import {
 } from 'lucide-react';
 import { thsApi, thsExportApi } from '../api/thsSync';
 import type {
+  AiExportTokenResult,
   ThsStatus,
   ThsSyncResult,
   ThsTrade,
@@ -42,6 +46,37 @@ export const ThsSyncPage: React.FC = () => {
 
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<ThsSyncResult | null>(null);
+
+  // ---------- AI 数据分享链接（一次性令牌） ----------
+  const [aiToken, setAiToken] = useState<AiExportTokenResult | null>(null);
+  const [aiTokenLoading, setAiTokenLoading] = useState(false);
+  const [aiTtlHours, setAiTtlHours] = useState(1);
+  const [aiCopied, setAiCopied] = useState(false);
+
+  const generateAiToken = useCallback(async () => {
+    setAiTokenLoading(true);
+    setError(null);
+    try {
+      const t = await thsApi.createAiExportToken(aiTtlHours);
+      setAiToken(t);
+      setAiCopied(false);
+    } catch (err) {
+      setError({ title: '生成分享链接失败', message: String(err), rawMessage: String(err), category: 'unknown' });
+    } finally {
+      setAiTokenLoading(false);
+    }
+  }, [aiTtlHours]);
+
+  const copyAiToken = useCallback(async () => {
+    if (!aiToken) return;
+    try {
+      await navigator.clipboard.writeText(aiToken.url);
+      setAiCopied(true);
+      window.setTimeout(() => setAiCopied(false), 2000);
+    } catch {
+      /* 剪贴板不可用时忽略 */
+    }
+  }, [aiToken]);
 
   const [reconcile, setReconcile] = useState<ThsReconcileResult | null>(null);
   const [reconcileLoading, setReconcileLoading] = useState(false);
@@ -623,6 +658,72 @@ export const ThsSyncPage: React.FC = () => {
                 </div>
               </Card>
               {syncResultView}
+
+              {/* AI 数据分享链接（一次性令牌） */}
+              <Card className="mt-4 p-5">
+                <div className="mb-3 flex items-center gap-2">
+                  <Link2 className="h-5 w-5 text-[hsl(var(--primary))]" />
+                  <div>
+                    <h3 className="text-base font-semibold text-foreground">AI 数据分享链接</h3>
+                    <p className="mt-0.5 text-sm text-secondary-text">
+                      生成一次性链接发给你的 AI，AI 可直接读取账户总览、持仓、交易流水与资产曲线（无需登录）
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-2 text-sm text-secondary-text">
+                    有效期
+                    <select
+                      className="input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 text-sm"
+                      value={aiTtlHours}
+                      onChange={(e) => setAiTtlHours(Number(e.target.value))}
+                    >
+                      <option value={1}>1 小时</option>
+                      <option value={2}>2 小时</option>
+                      <option value={6}>6 小时</option>
+                      <option value={12}>12 小时</option>
+                      <option value={24}>24 小时</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-primary text-sm"
+                    disabled={aiTokenLoading}
+                    onClick={() => void generateAiToken()}
+                  >
+                    {aiTokenLoading ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Link2 className="mr-1.5 h-4 w-4" />
+                    )}
+                    {aiTokenLoading ? '生成中…' : aiToken ? '重新生成' : '生成分享链接'}
+                  </button>
+                </div>
+                {aiToken && (
+                  <div className="mt-3 rounded-xl border border-border bg-muted/30 p-3">
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={aiToken.url}
+                        className="min-w-0 flex-1 rounded-lg border border-border bg-transparent px-3 py-2 text-xs text-secondary-text"
+                        onFocus={(e) => e.currentTarget.select()}
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary shrink-0 text-sm"
+                        onClick={() => void copyAiToken()}
+                      >
+                        {aiCopied ? <Check className="mr-1 h-4 w-4 text-emerald-500" /> : <Copy className="mr-1 h-4 w-4" />}
+                        {aiCopied ? '已复制' : '复制'}
+                      </button>
+                    </div>
+                    <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                      ⚠ {aiToken.note} AI 读取后可加参数：&format=text（Markdown 文本，推荐）、&days=90&curve_days=180 控制回溯天数
+                    </p>
+                  </div>
+                )}
+              </Card>
 
               {/* 账目对账状态：网页账本 vs 本地账户 */}
               {reconcile && reconcile.available && (

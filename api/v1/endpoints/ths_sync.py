@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import logging
 import os
+import time as _time
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
+from fastapi.responses import PlainTextResponse
 
 from api.v1.errors import api_error
 from src.services.ths_sync.ths_client import ThsLoginError
@@ -253,3 +256,158 @@ def export_detect():
         return result
     except Exception as exc:  # noqa: BLE001
         raise _internal_error("自动检测同步失败", exc)
+
+@router.get("/ai-export")
+def ai_export(
+    days: int = Query(90, description="交易流水回溯天数"),
+    curve_days: int = Query(180, description="资产曲线天数"),
+    format: str = Query("json", description="json | text（text 返回可直接粘贴给 AI 的 Markdown）"),
+):
+    """AI 分析导出：一次性打包账户总览/持仓/现金流水/交易流水/资产曲线/对账单摘要。
+
+    数据全部来自本地（账本导出文件导入 + 腾讯实时行情），无需账本登录态。
+    """
+    try:
+        data = _service().build_ai_export(days=days, curve_days=curve_days)
+        if format == "text":
+            return PlainTextResponse(
+                _render_ai_export_text(data, days, curve_days),
+                media_type="text/plain; charset=utf-8",
+            )
+        return data
+    except Exception as exc:  # noqa: BLE001
+        raise _internal_error("AI 数据导出失败", exc)
+
+def _render_ai_export_text(data: dict, days: int = 90, curve_days: int = 180) -> str:
+    """把 build_ai_export 结果渲染成 Markdown 文本（供 AI 直接阅读）。"""
+    lines = []
+    lines.append("# 持仓数据导出（AI 分析用）")
+    lines.append("")
+    lines.append("- 生成时间: %s" % (data.get("meta") or {}).get("generated_at", ""))
+    lines.append("- 数据来源: %s" % (data.get("meta") or {}).get("source", ""))
+    lines.append("- 账户: %s" % (data.get("meta") or {}).get("account", ""))
+    lines.append("")
+    ov = data.get("overview") or {}
+    lines.append("## 账户总览")
+    lines.append("")
+    lines.append("| 指标 | 数值 |")
+    lines.append("|---|---|")
+    for k, v in ov.items():
+        lines.append("| %s | %s |" % (k, v))
+    lines.append("")
+    pos = data.get("positions") or []
+    lines.append("## 当前持仓（%d 只）" % len(pos))
+    lines.append("")
+    if pos:
+        lines.append("| 代码 | 名称 | 数量 | 成本 | 现价 | 市值 | 持有盈亏 | 盈亏率%% | 当日盈亏 | 持仓天数 |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        for p in pos:
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                p.get("code", ""), p.get("name", ""), p.get("quantity", ""),
+                p.get("cost", ""), p.get("price", ""), p.get("market_value", ""),
+                p.get("hold_pnl", ""), p.get("hold_pnl_pct", ""),
+                p.get("day_pnl", ""), p.get("hold_days", "")))
+    lines.append("")
+    lines.append("## 现金流水")
+    lines.append("")
+    for c in data.get("cash_ledger") or []:
+        lines.append("- %s %s %s %s %s" % (c.get("event_date", ""), c.get("direction", ""),
+                                           c.get("amount", ""), c.get("note", ""), c.get("account_name", "")))
+    lines.append("")
+    stats = data.get("recent_trade_stats") or {}
+    lines.append("## 最近 %d 天交易统计" % days)
+    lines.append("")
+    for k, v in stats.items():
+        lines.append("- %s: %s" % (k, v))
+    lines.append("")
+    tr = data.get("recent_trades") or []
+    lines.append("## 最近 %d 天交易流水（%d 条）" % (days, len(tr)))
+    lines.append("")
+    if tr:
+        lines.append("| 日期 | 类别 | 代码 | 名称 | 数量 | 价格 | 金额 | 费用 | 备注 |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+        for r in tr:
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                r.get("trade_date", ""), r.get("record_type", ""), r.get("code", ""),
+                r.get("name", ""), r.get("quantity", ""), r.get("price", ""),
+                r.get("amount", ""), r.get("fee", ""), r.get("note", "")))
+    lines.append("")
+    ec = (data.get("equity_curve") or {}).get("summary") or {}
+    lines.append("## 资产曲线（最近 %d 天）" % curve_days)
+    lines.append("")
+    for k, v in ec.items():
+        lines.append("- %s: %s" % (k, v))
+    lines.append("")
+    for sm in data.get("statement_months") or []:
+        lines.append("## 对账单 %s" % sm.get("month", ""))
+        lines.append("")
+        for k, v in sm.items():
+            lines.append("- %s: %s" % (k, v))
+        lines.append("")
+    sy = data.get("statement_year") or {}
+    if sy:
+        lines.append("## 年度对账单 %s" % sy.get("year", ""))
+        lines.append("")
+        for k, v in sy.items():
+            if k == "months":
+                continue
+            lines.append("- %s: %s" % (k, v))
+    return "\n".join(lines)
+
+
+@router.post("/ai-export/token")
+def create_ai_export_token(
+    host: Optional[str] = Header(None, alias="Host"),
+    ttl_hours: int = Query(1, ge=1, le=24, description="令牌有效期（小时），默认 1 小时"),
+):
+    """生成一次性数据访问令牌（需登录）。返回阅后即焚 URL：外部 AI 读取后立即失效，未使用 1 小时自动过期。
+
+    数据内容与 /ai-export 相同（账户总览/持仓/现金流水/交易流水/资产曲线/对账单）。
+    """
+    from src.services.ths_sync.ai_export_token import create_token
+
+    ttl = ttl_hours * 3600
+    token = create_token(ttl_seconds=ttl)
+    host = (host or "127.0.0.1:8000").strip()
+    scheme = "http"
+    if host and not host.startswith("127.0.0.1") and not host.startswith("localhost") and not host.startswith("192.168.") and not host.startswith("10.") and not host.startswith("172."):
+        scheme = "https"
+    url = "%s://%s/api/v1/ths/ai-export/shared?token=%s" % (scheme, host, token)
+    expires_ts = _time.time() + ttl
+    return {
+        "token": token,
+        "url": url,
+        "expires_at": _dt.datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M:%S"),
+        "expires_in_seconds": ttl,
+        "note": "一次性有效：外部 AI 成功读取后立即失效；超时未使用自动过期；服务重启后失效。",
+    }
+
+
+@router.get("/ai-export/shared")
+def ai_export_shared(
+    token: str = Query(..., description="一次性令牌（由 /ai-export/token 生成）"),
+    days: int = Query(90, description="交易流水回溯天数"),
+    curve_days: int = Query(180, description="资产曲线天数"),
+    format: str = Query("json", description="json | text（text 返回 Markdown）"),
+):
+    """免登录共享访问：凭一次性令牌读取 AI 导出数据，阅后即焚。
+
+    令牌有效期内第一次成功读取后立即作废；令牌无效/已使用/已过期一律 403。
+    """
+    from src.services.ths_sync.ai_export_token import consume_token
+
+    if not consume_token(token):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "invalid_token", "message": "令牌无效、已使用或已过期，请重新生成"},
+        )
+    try:
+        data = _service().build_ai_export(days=days, curve_days=curve_days)
+    except Exception as exc:  # noqa: BLE001
+        raise _internal_error("AI 数据导出失败", exc)
+    if format == "text":
+        return PlainTextResponse(
+            _render_ai_export_text(data, days, curve_days),
+            media_type="text/plain; charset=utf-8",
+        )
+    return data

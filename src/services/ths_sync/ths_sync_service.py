@@ -1510,6 +1510,163 @@ class ThsSyncService:
             "import_warning": import_warning,
         }
 
+    def build_ai_export(self, *, days: int = 90, curve_days: int = 180) -> Dict[str, Any]:
+        """AI 分析导出：一次性打包账户总览/持仓/现金流水/交易流水/资产曲线/对账单摘要。
+
+        数据源：
+        - 账户总览/持仓：本地账户实时重放 + 腾讯实时行情（get_portfolio_snapshot）
+        - 现金流水：portfolio_cash_ledger（ths现金校正/初始现金等）
+        - 交易流水：portfolio_import_records（账本导出文件全类别，含银证转账/逆回购/分红/税费）
+        - 资产曲线：本地每日快照（build_equity_curve，TWR 收益率）
+        - 对账单摘要：build_monthly_statement / build_annual_statement
+        """
+        today = date.today()
+        export: Dict[str, Any] = {
+            "meta": {
+                "generated_at": today.isoformat(),
+                "source": "同花顺投资账本（实时接口 + 导出文件）+ 腾讯行情",
+                "account": DEFAULT_ACCOUNT_NAME,
+            }
+        }
+
+        # 1. 账户总览 + 持仓明细
+        try:
+            snap = self.portfolio_service.get_portfolio_snapshot(include_realtime=True)
+            agg = snap.get("aggregate") or snap.get("summary") or {}
+            accounts = snap.get("accounts") or []
+            export["overview"] = {
+                "total_equity": snap.get("total_equity"),
+                "total_market_value": snap.get("total_market_value"),
+                "total_cash": snap.get("total_cash"),
+                "realized_pnl": snap.get("realized_pnl"),
+                "unrealized_pnl": snap.get("unrealized_pnl"),
+                "unrealized_pnl_pct": snap.get("unrealized_pnl_pct"),
+                "day_pnl": snap.get("day_pnl"),
+                "day_pnl_pct": snap.get("day_pnl_pct"),
+                "hold_pnl": snap.get("hold_pnl"),
+                "hold_pnl_pct": snap.get("hold_pnl_pct"),
+                "currency": snap.get("currency") or "CNY",
+            }
+            positions = []
+            for acc in accounts:
+                acc_name = acc.get("account_name") or acc.get("name") or ""
+                for p in acc.get("positions", []) or []:
+                    mv = float(p.get("market_value_base") or 0)
+                    chg = p.get("day_change_pct")
+                    day_pnl = None
+                    if chg is not None:
+                        try:
+                            chg_f = float(chg)
+                            if abs(chg_f) > 1e-9:
+                                day_pnl = round(mv - mv / (1.0 + chg_f / 100.0), 2)
+                        except (TypeError, ValueError):
+                            day_pnl = None
+                    positions.append(
+                        {
+                            "account": acc_name,
+                            "code": p.get("symbol") or p.get("code") or "",
+                            "name": p.get("name") or "",
+                            "quantity": p.get("quantity"),
+                            "cost": p.get("avg_cost"),
+                            "price": p.get("last_price"),
+                            "market_value": round(mv, 2),
+                            "hold_pnl": p.get("unrealized_pnl_base"),
+                            "hold_pnl_pct": p.get("unrealized_pnl_pct"),
+                            "day_change_pct": chg,
+                            "day_pnl": day_pnl,
+                            "price_source": p.get("price_source"),
+                        }
+                    )
+            export["positions"] = positions
+        except Exception as exc:  # noqa: BLE001
+            export["overview_error"] = str(exc)[:200]
+
+        # 2. 现金流水（入金/出金校正记录）
+        try:
+            cl = self.portfolio_service.list_cash_ledger_events(page=1, page_size=100)
+            export["cash_ledger"] = cl.get("items", [])
+        except Exception as exc:  # noqa: BLE001
+            export["cash_ledger_error"] = str(exc)[:200]
+
+        # 3. 交易流水（最近 days 天，含银证转账/逆回购/分红/税费全类别）
+        try:
+            d0 = (today - timedelta(days=days)).isoformat()
+            recs = self.list_local_import_records(start_date=d0, end_date=today.isoformat())
+            records = recs.get("records", [])
+            export["recent_trades"] = records
+            # 简单统计
+            stats: Dict[str, float] = {
+                "buy_amount": 0.0, "sell_amount": 0.0,
+                "cash_in": 0.0, "cash_out": 0.0, "dividend": 0.0,
+            }
+            for r in records:
+                t = str(r.get("record_type") or "")
+                amt = float(r.get("amount") or 0)
+                if t in ("买入",):
+                    stats["buy_amount"] += abs(amt)
+                elif t == "卖出":
+                    stats["sell_amount"] += abs(amt)
+                elif t in self._EXPORT_CATEGORY_CASH_IN:
+                    stats["cash_in"] += abs(amt)
+                elif t in self._EXPORT_CATEGORY_CASH_OUT:
+                    stats["cash_out"] += abs(amt)
+                elif "除息" in t or "分红" in t or "股息" in t:
+                    stats["dividend"] += abs(amt)
+            export["recent_trade_stats"] = {k: round(v, 2) for k, v in stats.items()}
+        except Exception as exc:  # noqa: BLE001
+            export["recent_trades_error"] = str(exc)[:200]
+
+        # 4. 资产曲线（最近 curve_days 天）
+        try:
+            curve = self.portfolio_service.build_equity_curve(days=curve_days)
+            export["equity_curve"] = {
+                "summary": curve.get("summary"),
+                "series": curve.get("series"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            export["equity_curve_error"] = str(exc)[:200]
+
+        # 5. 对账单摘要（最近 2 个月 + 今年年度）
+        try:
+            months = []
+            y, m = today.year, today.month
+            for offset in (0, 1):
+                mm = m - offset
+                yy = y
+                if mm <= 0:
+                    mm += 12
+                    yy -= 1
+                st = self.portfolio_service.build_monthly_statement(
+                    month=f"{yy}-{mm:02d}", cost_method="fifo"
+                )
+                a = st.get("asset") or {}
+                c = st.get("cash") or {}
+                months.append(
+                    {
+                        "month": f"{yy}-{mm:02d}",
+                        "begin_equity": a.get("begin_equity"),
+                        "end_equity": a.get("end_equity"),
+                        "return_pct": a.get("return_pct"),
+                        "cash_in": c.get("inflow"),
+                        "cash_out": c.get("outflow"),
+                        "net_cash_outflow": (st.get("trades") or {}).get("net_cash_outflow"),
+                    }
+                )
+            export["statement_months"] = months
+            annual = self.portfolio_service.build_annual_statement(year=today.year, cost_method="fifo")
+            aa = annual.get("asset") or {}
+            export["statement_year"] = {
+                "year": today.year,
+                "begin_equity": aa.get("begin_equity"),
+                "end_equity": aa.get("end_equity"),
+                "return_pct": aa.get("return_pct"),
+                "months": annual.get("months"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            export["statement_error"] = str(exc)[:200]
+
+        return export
+
     def _save_export_snapshot(self, parsed: Dict[str, Any]) -> None:
         """把导出的账本汇总持仓快照写入本地 JSON，供持仓页盘后「今日盈亏」读取。
 

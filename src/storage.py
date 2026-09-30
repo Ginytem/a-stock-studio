@@ -2905,6 +2905,67 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             logger.error(f"保存分析历史失败: {e}")
             return 0
 
+    def save_external_review(self, report_date: str, title: str, markdown: str) -> int:
+        """
+        保存外部导入的账户级复盘报告（report_type=external_review）。
+
+        复用 analysis_history 表：code 用账户占位 'ACCOUNT'，正文与元信息存 raw_result JSON。
+        Returns:
+            新记录的 AnalysisHistory.id；失败返回 0。
+        """
+        if not markdown or not markdown.strip():
+            return 0
+        payload = {
+            "external_review": True,
+            "report_date": report_date,
+            "title": title,
+            "markdown": markdown,
+        }
+        try:
+            def _write(session: Session) -> int:
+                history = AnalysisHistory(
+                    query_id="external",
+                    code="ACCOUNT",
+                    name=title or report_date,
+                    report_type="external_review",
+                    sentiment_score=None,
+                    operation_advice=None,
+                    trend_prediction=None,
+                    analysis_summary=markdown.strip()[:500],
+                    raw_result=self._safe_json_dumps(payload),
+                    news_content=None,
+                    context_snapshot=None,
+                    ideal_buy=None,
+                    secondary_buy=None,
+                    stop_loss=None,
+                    take_profit=None,
+                    created_at=datetime.now(),
+                )
+                session.add(history)
+                session.flush()
+                return int(history.id or 0)
+            return self._run_write_transaction("save_external_review", _write)
+        except Exception as e:
+            logger.error(f"保存外部复盘失败: {e}")
+            return 0
+
+    def get_external_reviews(self, offset: int = 0, limit: int = 50) -> Tuple[List[AnalysisHistory], int]:
+        """按导入时间倒序分页查询外部复盘报告（report_type=external_review）。"""
+        from sqlalchemy import func
+        with self.get_session() as session:
+            conditions = [AnalysisHistory.report_type == "external_review"]
+            where_clause = and_(*conditions)
+            total = session.execute(select(func.count(AnalysisHistory.id)).where(where_clause)).scalar() or 0
+            data_query = (
+                select(AnalysisHistory)
+                .where(where_clause)
+                .order_by(desc(AnalysisHistory.created_at))
+                .offset(offset)
+                .limit(limit)
+            )
+            results = session.execute(data_query).scalars().all()
+            return list(results), total
+
     def update_analysis_history_diagnostics(
         self,
         *,
@@ -3061,7 +3122,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         offset: int = 0,
-        limit: int = 20
+        limit: int = 20,
+        exclude_report_type: Optional[str] = None
     ) -> Tuple[List[AnalysisHistory], int]:
         """
         分页查询分析历史记录（带总数）
@@ -3091,6 +3153,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     conditions.append(AnalysisHistory.code == code)
             if report_type:
                 conditions.append(AnalysisHistory.report_type == report_type)
+            if exclude_report_type:
+                conditions.append(AnalysisHistory.report_type != exclude_report_type)
             if start_date:
                 # created_at >= start_date 00:00:00
                 conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))

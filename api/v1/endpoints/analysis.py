@@ -30,6 +30,8 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from api.deps import get_config_dep
+from api.deps import get_database_manager
+from src.storage import DatabaseManager
 from api.v1.errors import api_error
 from api.v1.schemas.analysis import (
     AnalyzeRequest,
@@ -1520,3 +1522,99 @@ def _build_analysis_report(
         strategy=strategy,
         details=details
     )
+
+
+# ---------------- 外部复盘报告导入（v1.8 协议 Markdown 回填） ----------------
+
+@router.post(
+    "/external-reviews",
+    response_model=Dict[str, Any],
+    summary="导入外部复盘报告",
+    description="将外部 AI 按复盘协议生成的 Markdown 报告回填保存（账户级，不入个股分析历史列表）",
+)
+def import_external_review(
+    body: Dict[str, Any] = Body(...),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+):
+    from src.storage import DatabaseManager as _DBManager
+    report_date = str((body.get("report_date") or "").strip() or datetime.now().strftime("%Y-%m-%d"))
+    title = str((body.get("title") or "").strip() or f"复盘 {report_date}")
+    markdown = str(body.get("markdown") or "").strip()
+    if not markdown:
+        raise HTTPException(status_code=400, detail=api_error("bad_request", "markdown 内容不能为空"))
+    if len(markdown) > 2_000_000:
+        raise HTTPException(status_code=400, detail=api_error("bad_request", "markdown 内容过长"))
+    review_id = db_manager.save_external_review(report_date=report_date, title=title, markdown=markdown)
+    if not review_id:
+        raise HTTPException(status_code=500, detail=api_error("internal_error", "保存失败"))
+    return {"id": review_id, "report_date": report_date, "title": title}
+
+
+@router.get(
+    "/external-reviews",
+    response_model=Dict[str, Any],
+    summary="外部复盘报告列表",
+)
+def list_external_reviews(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+):
+    records, total = db_manager.get_external_reviews(offset=(page - 1) * limit, limit=limit)
+    items = []
+    for r in records:
+        raw = {}
+        try:
+            raw = json.loads(r.raw_result) if r.raw_result else {}
+        except Exception:
+            raw = {}
+        items.append({
+            "id": r.id,
+            "report_date": raw.get("report_date") or (r.created_at.strftime("%Y-%m-%d") if r.created_at else ""),
+            "title": raw.get("title") or r.name or "",
+            "summary": (r.analysis_summary or "")[:120],
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return {"total": total, "page": page, "limit": limit, "items": items}
+
+
+@router.get(
+    "/external-reviews/{review_id}",
+    response_model=Dict[str, Any],
+    summary="外部复盘报告详情",
+)
+def get_external_review_detail(
+    review_id: int,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+):
+    record = db_manager.get_analysis_history_by_id(review_id)
+    if record is None or record.report_type != "external_review":
+        raise HTTPException(status_code=404, detail=api_error("not_found", "记录不存在"))
+    raw = {}
+    try:
+        raw = json.loads(record.raw_result) if record.raw_result else {}
+    except Exception:
+        raw = {}
+    return {
+        "id": record.id,
+        "report_date": raw.get("report_date") or (record.created_at.strftime("%Y-%m-%d") if record.created_at else ""),
+        "title": raw.get("title") or record.name or "",
+        "markdown": raw.get("markdown") or "",
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }
+
+
+@router.delete(
+    "/external-reviews/{review_id}",
+    response_model=Dict[str, Any],
+    summary="删除外部复盘报告",
+)
+def delete_external_review(
+    review_id: int,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+):
+    record = db_manager.get_analysis_history_by_id(review_id)
+    if record is None or record.report_type != "external_review":
+        raise HTTPException(status_code=404, detail=api_error("not_found", "记录不存在"))
+    deleted = db_manager.delete_analysis_history_records([review_id])
+    return {"deleted": deleted}

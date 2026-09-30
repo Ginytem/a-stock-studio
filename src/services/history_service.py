@@ -265,7 +265,8 @@ class HistoryService:
                 start_date=start_dt,
                 end_date=end_dt,
                 offset=offset,
-                limit=limit
+                limit=limit,
+                exclude_report_type=(None if report_type else "external_review"),
             )
             
             # Convert to response format

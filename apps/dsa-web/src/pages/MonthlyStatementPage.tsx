@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import type { Components } from 'react-markdown';
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -960,6 +961,78 @@ type ExternalReviewItem = {
   createdAt: string | null;
 };
 
+type ExternalReviewDigest = {
+  totalAsset?: string;
+  marketValue?: string;
+  cash?: string;
+  positionPct?: string;
+  singleConc?: string;
+  industryConc?: string;
+  totalPosition?: string;
+  violations?: string[];
+  confidence?: { rule?: number; market?: number };
+};
+
+/** ASCII 决策树 / 图表代码块与宽表格横向滚动，避免窄屏撑破布局 */
+const reviewMdComponents: Components = {
+  pre: ({ children }) => <pre className="overflow-x-auto whitespace-pre">{children}</pre>,
+  table: ({ children }) => (
+    <div className="overflow-x-auto">
+      <table>{children}</table>
+    </div>
+  ),
+};
+
+function DigestCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-base/60 p-2.5">
+      <p className="text-xs text-muted-text">{label}</p>
+      <p className="mt-0.5 text-sm font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function ReviewDigest({ digest }: { digest: ExternalReviewDigest | null | undefined }) {
+  if (!digest || Object.keys(digest).length === 0) return null;
+  const conf = digest.confidence;
+  return (
+    <div className="mb-4 rounded-xl border border-border/70 bg-base/50 p-3">
+      <h3 className="mb-2 text-xs font-semibold text-muted-text">要点速览</h3>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {digest.totalAsset ? <DigestCell label="总资产" value={digest.totalAsset} /> : null}
+        {digest.marketValue ? <DigestCell label="股票市值" value={digest.marketValue} /> : null}
+        {digest.cash ? <DigestCell label="现金储备" value={digest.cash} /> : null}
+        {digest.positionPct ? <DigestCell label="股票仓位" value={digest.positionPct} /> : null}
+      </div>
+      {digest.singleConc || digest.industryConc || digest.totalPosition ? (
+        <div className="mt-2 space-y-1 text-xs">
+          {digest.singleConc ? (
+            <p className="text-muted-text"><span className="text-foreground">单票集中度</span>：{digest.singleConc}</p>
+          ) : null}
+          {digest.industryConc ? (
+            <p className="text-muted-text"><span className="text-foreground">行业集中度</span>：{digest.industryConc}</p>
+          ) : null}
+          {digest.totalPosition ? (
+            <p className="text-muted-text"><span className="text-foreground">总仓位</span>：{digest.totalPosition}</p>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        {conf && (conf.rule !== undefined || conf.market !== undefined) ? (
+          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-primary">
+            置信度 规则 {conf.rule ?? '--'} / 市场 {conf.market ?? '--'}
+          </span>
+        ) : null}
+        {Array.isArray(digest.violations) && digest.violations.length > 0 ? (
+          <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-red-500">
+            违规 {digest.violations.length} 项：{digest.violations.join('、')}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ExternalReviewView() {
   const [reports, setReports] = useState<ExternalReviewItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -968,7 +1041,7 @@ function ExternalReviewView() {
   const [markdown, setMarkdown] = useState('');
   const [saving, setSaving] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
-  const [detail, setDetail] = useState<{ title: string; reportDate: string; markdown: string } | null>(null);
+  const [detail, setDetail] = useState<{ title: string; reportDate: string; markdown: string; digest: ExternalReviewDigest } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -1016,7 +1089,12 @@ function ExternalReviewView() {
     setDetail(null);
     try {
       const d = await analysisApi.getExternalReview(id);
-      setDetail({ title: d.title, reportDate: d.reportDate, markdown: d.markdown });
+      setDetail({
+        title: d.title,
+        reportDate: d.reportDate,
+        markdown: d.markdown,
+        digest: (d.digest ?? {}) as ExternalReviewDigest,
+      });
     } catch (err) {
       setError(String(err));
     }
@@ -1128,9 +1206,11 @@ function ExternalReviewView() {
                 </div>
                 {openId === r.id ? (
                   <div className="border-t border-border/60 px-4 py-3">
-                    <p className="mb-2 text-xs text-muted-text">摘要：{r.summary || '--'}</p>
                     {detail && detail.title === r.title ? (
-                      <ReportMarkdownBody content={detail.markdown} />
+                      <>
+                        <ReviewDigest digest={detail.digest} />
+                        <ReportMarkdownBody content={detail.markdown} components={reviewMdComponents} />
+                      </>
                     ) : (
                       <p className="text-xs text-muted-text">加载中…</p>
                     )}

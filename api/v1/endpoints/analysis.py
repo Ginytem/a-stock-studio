@@ -1537,6 +1537,11 @@ def import_external_review(
     db_manager: DatabaseManager = Depends(get_database_manager),
 ):
     from src.storage import DatabaseManager as _DBManager
+    from src.services.external_review_processor import (
+        clean_review_markdown,
+        extract_digest,
+        digest_to_summary_text,
+    )
     report_date = str((body.get("report_date") or "").strip() or datetime.now().strftime("%Y-%m-%d"))
     title = str((body.get("title") or "").strip() or f"复盘 {report_date}")
     markdown = str(body.get("markdown") or "").strip()
@@ -1544,10 +1549,20 @@ def import_external_review(
         raise HTTPException(status_code=400, detail=api_error("bad_request", "markdown 内容不能为空"))
     if len(markdown) > 2_000_000:
         raise HTTPException(status_code=400, detail=api_error("bad_request", "markdown 内容过长"))
-    review_id = db_manager.save_external_review(report_date=report_date, title=title, markdown=markdown)
+    # 清洗：剥离过程自述章节（协议 0/1/2/3/16），只存核心章节；并提取要点速览
+    cleaned = clean_review_markdown(markdown)
+    digest = extract_digest(markdown)
+    summary_text = digest_to_summary_text(digest) or None
+    review_id = db_manager.save_external_review(
+        report_date=report_date,
+        title=title,
+        markdown=cleaned,
+        digest=digest,
+        summary_text=summary_text,
+    )
     if not review_id:
         raise HTTPException(status_code=500, detail=api_error("internal_error", "保存失败"))
-    return {"id": review_id, "report_date": report_date, "title": title}
+    return {"id": review_id, "report_date": report_date, "title": title, "cleaned_chars": len(cleaned), "original_chars": len(markdown)}
 
 
 @router.get(
@@ -1600,6 +1615,7 @@ def get_external_review_detail(
         "report_date": raw.get("report_date") or (record.created_at.strftime("%Y-%m-%d") if record.created_at else ""),
         "title": raw.get("title") or record.name or "",
         "markdown": raw.get("markdown") or "",
+        "digest": raw.get("digest") or {},
         "created_at": record.created_at.isoformat() if record.created_at else None,
     }
 

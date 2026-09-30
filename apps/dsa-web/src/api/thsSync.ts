@@ -242,9 +242,9 @@ export const thsApi = {
     apiClient
       .post<AiExportTokenResult>(`/api/v1/ths/ai-export/token?ttl_hours=${ttlHours}`, null, { timeout: 60000 })
       .then((r) => toCamelCase<AiExportTokenResult>(r.data)),
-  getAiExport: (days = 90, curveDays = 180) =>
+  getAiExport: (days = 90, curveDays = 180, scope: 'core' | 'compact' | 'full' = 'full') =>
     apiClient
-      .get<unknown>(`/api/v1/ths/ai-export?format=json&days=${days}&curve_days=${curveDays}`, {
+      .get<unknown>(`/api/v1/ths/ai-export?format=json&days=${days}&curve_days=${curveDays}&scope=${scope}`, {
         timeout: LONG_TIMEOUT,
       })
       .then((r) => r.data),

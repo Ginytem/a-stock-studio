@@ -55,6 +55,13 @@ export const ThsSyncPage: React.FC = () => {
   const [jsonLoading, setJsonLoading] = useState(false);
   const [jsonCopied, setJsonCopied] = useState(false);
   const [jsonInfo, setJsonInfo] = useState<string | null>(null);
+  const [aiScope, setAiScope] = useState<'core' | 'compact' | 'full'>('core');
+
+  const SCOPE_LABEL: Record<string, string> = {
+    core: '核心（总览+持仓，约 2K 字符）',
+    compact: '精简（+现金+近20笔交易+曲线摘要，约 7K 字符）',
+    full: '完整（含全部流水与对账单，约 38K 字符）',
+  };
 
   const generateAiToken = useCallback(async () => {
     setAiTokenLoading(true);
@@ -86,18 +93,18 @@ export const ThsSyncPage: React.FC = () => {
     setError(null);
     setJsonInfo(null);
     try {
-      const data = await thsApi.getAiExport(90, 180);
+      const data = await thsApi.getAiExport(90, 180, aiScope);
       const text = JSON.stringify(data, null, 2);
       await navigator.clipboard.writeText(text);
       setJsonCopied(true);
-      setJsonInfo(`已复制 ${text.length.toLocaleString('zh-CN')} 字符，直接粘贴给 AI`);
+      setJsonInfo(`已复制 ${text.length.toLocaleString('zh-CN')} 字符（${SCOPE_LABEL[aiScope]}），直接粘贴给 AI`);
       window.setTimeout(() => setJsonCopied(false), 2500);
     } catch (err) {
       setError({ title: '获取数据失败', message: String(err), rawMessage: String(err), category: 'unknown' });
     } finally {
       setJsonLoading(false);
     }
-  }, []);
+  }, [aiScope]);
 
   const [reconcile, setReconcile] = useState<ThsReconcileResult | null>(null);
   const [reconcileLoading, setReconcileLoading] = useState(false);
@@ -692,6 +699,18 @@ export const ThsSyncPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-2 text-sm text-secondary-text">
+                    数据范围
+                    <select
+                      className="input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 text-sm"
+                      value={aiScope}
+                      onChange={(e) => setAiScope(e.target.value as 'core' | 'compact' | 'full')}
+                    >
+                      <option value="core">核心（总览+持仓）</option>
+                      <option value="compact">精简（+现金+近20笔交易）</option>
+                      <option value="full">完整（全部数据）</option>
+                    </select>
+                  </label>
                   <button
                     type="button"
                     className="btn-primary text-sm"
@@ -705,7 +724,7 @@ export const ThsSyncPage: React.FC = () => {
                     )}
                     {jsonLoading ? '打包中…' : jsonCopied ? '已复制' : '复制 JSON 数据给 AI'}
                   </button>
-                  <span className="text-xs text-secondary-text">推荐：AI 访问不了链接时，用这个直接把数据粘贴过去</span>
+                  <span className="text-xs text-secondary-text">省 token：分析持仓用「核心」即可，交易/对账再选更大范围</span>
                 </div>
                 {jsonInfo && <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">{jsonInfo}</p>}
                 <div className="mt-4 flex flex-wrap items-center gap-2">

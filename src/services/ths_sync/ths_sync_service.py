@@ -1510,7 +1510,8 @@ class ThsSyncService:
             "import_warning": import_warning,
         }
 
-    def build_ai_export(self, *, days: int = 90, curve_days: int = 180) -> Dict[str, Any]:
+    def build_ai_export(self, *, days: int = 90, curve_days: int = 180, scope: str = "full") -> Dict[str, Any]:
+        """scope: core(仅总览+持仓+统计) / compact(+现金流水+最近20笔交易+曲线摘要) / full(完整)"""
         """AI 分析导出：一次性打包账户总览/持仓/现金流水/交易流水/资产曲线/对账单摘要。
 
         数据源：
@@ -1665,6 +1666,27 @@ class ThsSyncService:
         except Exception as exc:  # noqa: BLE001
             export["statement_error"] = str(exc)[:200]
 
+
+        # 按 scope 裁剪（省 token）
+        if scope == "core":
+            export.pop("cash_ledger", None)
+            export.pop("cash_ledger_error", None)
+            export.pop("recent_trades", None)
+            export.pop("recent_trades_error", None)
+            export.pop("equity_curve", None)
+            export.pop("equity_curve_error", None)
+            export.pop("statement_months", None)
+            export.pop("statement_year", None)
+        elif scope == "compact":
+            export.pop("equity_curve_error", None)
+            ec = export.get("equity_curve") or {}
+            if isinstance(ec, dict) and ec.get("series") is not None:
+                export["equity_curve"] = {"summary": ec.get("summary")}
+            rt = export.get("recent_trades")
+            if isinstance(rt, list) and len(rt) > 20:
+                export["recent_trades"] = rt[:20]
+            export.pop("statement_months", None)
+            export.pop("statement_year", None)
         return export
 
     def _save_export_snapshot(self, parsed: Dict[str, Any]) -> None:

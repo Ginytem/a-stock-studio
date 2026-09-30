@@ -47,20 +47,24 @@ _SELFCHECK_RE = re.compile(r"^\s*(自检项|协议自检|自检)[（(]?.*[）)]?
 _SECTION_RE = re.compile(r"^\s*#{0,4}\s*(\d{1,2})\.\s*(.+?)\s*$")
 
 
+# 关键词 → 章节号 反向索引：识别优先按标题语义匹配关键词，
+# 不依赖编号（清洗后章节号会从 1 重排，编号不再与协议一一对应）
+_KEYWORD_TO_NUM: Dict[str, int] = {kw: num for num, kw in SECTION_KEYWORDS.items()}
+
+
 def _classify_line(line: str) -> Optional[Tuple[int, str]]:
     m = _SECTION_RE.match(line)
     if not m:
         return None
     num = int(m.group(1))
     title = m.group(2).strip()
+    # 1) 标题命中任意协议关键词 → 按该关键词的章节号归类（语义优先）
+    for kw, kw_num in _KEYWORD_TO_NUM.items():
+        if kw in title:
+            return kw_num, title
+    # 2) 兜底：标题很短且与编号对应关键词同义（如 "规则审计" 命中 "规则"）
     kw = SECTION_KEYWORDS.get(num, "")
-    if not kw:
-        return None
-    # 标题需命中关键词（或标题本身包含关键词），避免误伤正文以数字开头的行
-    if kw in title or any(w in title for w in ("总表", "穿透", "执行清单", "诊断", "质证", "做空", "联动")):
-        return num, title
-    # 标题很短且与关键词同义（如 "规则审计" 命中了 "规则"）
-    if len(title) <= 12 and (kw in title or title.startswith(kw)):
+    if kw and len(title) <= 12 and title.startswith(kw):
         return num, title
     return None
 
@@ -128,12 +132,30 @@ def _fmt_num(raw: str) -> Optional[str]:
     return s if s else None
 
 
+# Markdown 强调/链接标记：外部报告常用 **加粗** 包裹关键数字与结论，
+# 提取要点前先剥离，避免正则被 `**` 挡掉（如 **¥762,635.11**）。
+_MD_EMPH_PAIRS = [
+    (re.compile(r"\*\*(.+?)\*\*"), r"\1"),  # 粗体 **x**
+    (re.compile(r"__(.+?)__"), r"\1"),      # 粗体 __x__
+    (re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)"), r"\1"),  # 斜体 *x*
+    (re.compile(r"(?<!_)_([^_\n]+)_(?!_)"), r"\1"),      # 斜体 _x_
+    (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),       # 链接 [x](url) -> x
+]
+
+
+def _strip_md_emphasis(text: str) -> str:
+    for pat, repl in _MD_EMPH_PAIRS:
+        text = pat.sub(repl, text)
+    return text
+
+
 def extract_digest(markdown: str, sections: Optional[List[Tuple[int, str, str]]] = None) -> Dict[str, object]:
-    """从全文/章节提取要点速览。宽松匹配，抓不到返回 None 字段。"""
-    if sections is None:
-        sections = split_sections(markdown)
-    text = markdown
-    body_by_num = {num: body for num, _, body in sections}
+    """从全文/章节提取要点速览。宽松匹配，抓不到返回 None 字段。
+
+    先剥离 Markdown 加粗/斜体/链接标记再提取；sections 参数仅作兼容，内部始终基于剥离后文本切分。
+    """
+    text = _strip_md_emphasis(markdown)
+    sections = split_sections(text)
 
     digest: Dict[str, object] = {}
 
@@ -152,7 +174,8 @@ def extract_digest(markdown: str, sections: Optional[List[Tuple[int, str, str]]]
         digest["position_pct"] = m.group(1) + "%"
 
     # ---- 集中度 / 总仓位（第 9 章，每项一行：评级 + 明细）----
-    risk_body = body_by_num.get(9, "")
+    # 按标题名匹配章节（不依赖编号），对原始文本与清洗后重排文本都鲁棒
+    risk_body = next((body for _, title, body in sections if "风险暴露" in title), "")
     if risk_body:
         m = re.search(r"单票集中度[:：]\s*([^\n]+)", risk_body)
         if m:
@@ -165,7 +188,7 @@ def extract_digest(markdown: str, sections: Optional[List[Tuple[int, str, str]]]
             digest["total_position"] = m.group(1).strip()
 
     # ---- 违规项（第 5 章）----
-    rule_body = body_by_num.get(5, "")
+    rule_body = next((body for _, title, body in sections if "规则" in title), "")
     violations = []
     if rule_body:
         for m in re.finditer(r"([\u4e00-\u9fffA-Za-z0-9（）() ]+?)：违规([（(]?[^）)]*[）)]?)?", rule_body):

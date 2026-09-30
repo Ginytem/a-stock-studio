@@ -209,6 +209,17 @@ def extract_digest(markdown: str, sections: Optional[List[Tuple[int, str, str]]]
         m = re.search(r"总仓位[:：]\s*([^\n]+)", risk_body)
         if m:
             digest["total_position"] = m.group(1).strip()
+    # v3 兜底：行业集中度为资产全景章内文（叙述式），不在风险章 → 全文找第一处
+    if not digest.get("industry_conc"):
+        m = re.search(r"行业集中度\s*[:：]\s*([^\n]+)", text)
+        if m:
+            line = m.group(1).strip()
+            # 去掉"极高。"等判断词前缀，保留三项占比与合计
+            line = re.sub(r"^(极高|高|中|偏低|低|极低)\s*[。.]?\s*", "", line)
+            digest["industry_conc"] = line
+    # v3 兜底：无"总仓位"独立行（以"股票资产占比 94.93%"表述）→ 用股票仓位回填
+    if "total_position" not in digest and digest.get("position_pct"):
+        digest["total_position"] = digest["position_pct"]
     # 单票集中度：v3 资产表写"CR2 高达 54.34%"，v2 风险章写"… = 54.27%"
     m = re.search(r"CR2\s*(?:高达|达到|为|是|至|达)?\s*([\d.]+)\s*%", text)
     if m:
@@ -257,10 +268,25 @@ def digest_to_summary_text(digest: Dict[str, object]) -> str:
     parts = []
     if digest.get("total_asset"):
         parts.append(f"总资产 {digest['total_asset']}")
-    if digest.get("position_pct"):
+    # 总仓位（v2 写"总仓位：高。…94.93%…"，v3 与股票仓位同值）→ 显示一次，避免重复
+    total_pos = str(digest.get("total_position") or "").strip()
+    pos = None
+    if total_pos:
+        m = re.search(r"([\d.]+)\s*%", total_pos)
+        pos = m.group(1) + "%" if m else None
+    if pos is None and digest.get("position_pct"):
+        pos = digest["position_pct"]
+    if pos:
+        parts.append(f"总仓位 {pos}")
+    elif digest.get("position_pct"):
         parts.append(f"股票仓位 {digest['position_pct']}")
     if digest.get("single_conc"):
         parts.append(f"单票集中度 {str(digest['single_conc'])[:40]}")
+    # 行业集中度：列表卡只展示合计（行内最后一个百分比），明细见详情页 digest
+    ind = str(digest.get("industry_conc") or "").strip()
+    if ind:
+        pcts = re.findall(r"([\d.]+)\s*%", ind)
+        parts.append(f"行业集中度 {pcts[-1]}%" if pcts else f"行业集中度 {ind[:20]}")
     conf = digest.get("confidence")
     if isinstance(conf, dict):
         parts.append(f"置信度 {conf.get('rule', '?')}/{conf.get('market', '?')}")

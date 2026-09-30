@@ -261,6 +261,7 @@ def export_detect():
 def ai_export(
     days: int = Query(90, description="交易流水回溯天数"),
     curve_days: int = Query(180, description="资产曲线天数"),
+    scope: str = Query("full", pattern="^(core|compact|full)$", description="数据范围：core(仅总览+持仓+统计) / compact(+现金+最近20笔+曲线摘要) / full(完整)"),
     format: str = Query("json", description="json | text（text 返回可直接粘贴给 AI 的 Markdown）"),
 ):
     """AI 分析导出：一次性打包账户总览/持仓/现金流水/交易流水/资产曲线/对账单摘要。
@@ -268,7 +269,7 @@ def ai_export(
     数据全部来自本地（账本导出文件导入 + 腾讯实时行情），无需账本登录态。
     """
     try:
-        data = _service().build_ai_export(days=days, curve_days=curve_days)
+        data = _service().build_ai_export(days=days, curve_days=curve_days, scope=scope)
         if format == "text":
             return PlainTextResponse(
                 _render_ai_export_text(data, days, curve_days),
@@ -388,6 +389,7 @@ def ai_export_shared(
     token: str = Query(..., description="一次性令牌（由 /ai-export/token 生成）"),
     days: int = Query(90, description="交易流水回溯天数"),
     curve_days: int = Query(180, description="资产曲线天数"),
+    scope: str = Query("full", pattern="^(core|compact|full)$", description="数据范围：core(仅总览+持仓+统计) / compact(+现金+最近20笔+曲线摘要) / full(完整)"),
     format: str = Query("json", description="json | text（text 返回 Markdown）"),
 ):
     """免登录共享访问：凭一次性令牌读取 AI 导出数据，阅后即焚。
@@ -402,7 +404,7 @@ def ai_export_shared(
             detail={"error": "invalid_token", "message": "令牌无效、已使用或已过期，请重新生成"},
         )
     try:
-        data = _service().build_ai_export(days=days, curve_days=curve_days)
+        data = _service().build_ai_export(days=days, curve_days=curve_days, scope=scope)
     except Exception as exc:  # noqa: BLE001
         raise _internal_error("AI 数据导出失败", exc)
     if format == "text":

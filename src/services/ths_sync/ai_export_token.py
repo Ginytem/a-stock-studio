@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""AI 数据导出一次性令牌（阅后即焚）。
+"""AI 数据导出一次性令牌（阅后宽限期）。
 
 - 生成：登录态调用 token 接口生成，有效期默认 1 小时（可配 1-24 小时）；
-- 使用：外部 AI 携带 token 访问 shared 接口，成功读取后立即作废（阅后即焚）；
+- 使用：外部 AI 携带 token 访问 shared 接口，成功读取后进入宽限期
+  （默认 10 分钟，可配 1-60 分钟），宽限期内可重复读取（AI 抓取失败可重试）；
+  超过宽限期或超时未用即失效；
 - 过期：超时未用自动失效；服务重启后内存清空（令牌全部失效，更安全）。
 """
 
@@ -10,54 +12,83 @@ import secrets
 import threading
 import time
 
-_TOKEN_TTL_SECONDS = 3600  # 默认 1 小时
+_TOKEN_TTL_SECONDS = 3600  # 默认 1 小时（未读取时的最大存活时长）
+_TOKEN_GRACE_SECONDS = 600  # 阅后宽限期：首次成功读取后 10 分钟内仍可重复读取
 
-_tokens: dict[str, dict] = {}  # token -> {"created_at": float, "expires_at": float}
+_tokens: dict[str, dict] = {}  # token -> {"created_at": float, "expires_at": float, "consumed_at": float|None}
 _lock = threading.Lock()
 
 
-def create_token(ttl_seconds: int = _TOKEN_TTL_SECONDS) -> str:
-    """生成一次性令牌。ttl_seconds 不得小于 60 秒。"""
+def create_token(ttl_seconds: int = _TOKEN_TTL_SECONDS, grace_seconds: int = _TOKEN_GRACE_SECONDS) -> str:
+    """生成一次性令牌。ttl_seconds 不得小于 60 秒；grace_seconds 不得小于 60 秒。"""
     if ttl_seconds < 60:
         ttl_seconds = 60
+    if grace_seconds < 60:
+        grace_seconds = 60
     with _lock:
         _purge_locked()
         token = secrets.token_urlsafe(32)
         now = time.time()
-        _tokens[token] = {"created_at": now, "expires_at": now + ttl_seconds}
+        _tokens[token] = {
+            "created_at": now,
+            "expires_at": now + ttl_seconds,
+            "consumed_at": None,
+            "grace_seconds": grace_seconds,
+        }
         return token
 
 
 def _purge_locked() -> None:
-    """删除所有已过期令牌（调用方需持有锁）。"""
+    """删除所有已失效令牌（调用方需持有锁）：超时未用，或已读取且超过阅后宽限期。"""
     now = time.time()
-    expired = [t for t, info in _tokens.items() if info["expires_at"] <= now]
+    expired = [
+        t
+        for t, info in _tokens.items()
+        if info["expires_at"] <= now
+        or (info.get("consumed_at") is not None and now - info["consumed_at"] > info.get("grace_seconds", _TOKEN_GRACE_SECONDS))
+    ]
     for t in expired:
         _tokens.pop(t, None)
 
 
 def consume_token(token: str) -> bool:
-    """消费令牌：有效则立即删除（阅后即焚）并返回 True，否则返回 False。"""
+    """校验令牌并标记首次读取。
+
+    - 首次读取：记录 consumed_at 并返回 True（此后进入阅后宽限期）；
+    - 已读取：宽限期内返回 True（可重复读取），超过宽限期返回 False 并清除；
+    - 无效 / 超时未用 / 超宽限期：返回 False。
+    """
     if not token or not isinstance(token, str):
         return False
     with _lock:
         _purge_locked()
-        info = _tokens.pop(token, None)
+        info = _tokens.get(token)
         if info is None:
             return False
         if info["expires_at"] <= time.time():
+            _tokens.pop(token, None)
             return False
+        consumed_at = info.get("consumed_at")
+        if consumed_at is not None:
+            if time.time() - consumed_at > info.get("grace_seconds", _TOKEN_GRACE_SECONDS):
+                _tokens.pop(token, None)
+                return False
+            return True
+        info["consumed_at"] = time.time()
         return True
 
 
 def token_info(token: str):
-    """查询令牌信息（不消费、不作废）。无效或过期返回 None。"""
+    """查询令牌信息（不消费、不作废）。无效、过期或超宽限期返回 None。"""
     if not token:
         return None
     with _lock:
         _purge_locked()
         info = _tokens.get(token)
         if info is None or info["expires_at"] <= time.time():
+            return None
+        consumed_at = info.get("consumed_at")
+        if consumed_at is not None and time.time() - consumed_at > info.get("grace_seconds", _TOKEN_GRACE_SECONDS):
             return None
         return dict(info)
 

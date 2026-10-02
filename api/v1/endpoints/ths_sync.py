@@ -360,15 +360,18 @@ def _render_ai_export_text(data: dict, days: int = 90, curve_days: int = 180) ->
 def create_ai_export_token(
     host: Optional[str] = Header(None, alias="Host"),
     ttl_hours: int = Query(1, ge=1, le=24, description="令牌有效期（小时），默认 1 小时"),
+    grace_minutes: int = Query(10, ge=1, le=60, description="阅后宽限期（分钟）：首次读取后仍可重复读取的时长，默认 10 分钟"),
 ):
-    """生成一次性数据访问令牌（需登录）。返回阅后即焚 URL：外部 AI 读取后立即失效，未使用 1 小时自动过期。
+    """生成数据访问令牌（需登录）。返回分享 URL：外部 AI 首次读取后进入宽限期（默认 10 分钟），
+    宽限期内可重复读取（抓取失败可重试）；未使用按 ttl_hours 自动过期。
 
     数据内容与 /ai-export 相同（账户总览/持仓/现金流水/交易流水/资产曲线/对账单）。
     """
     from src.services.ths_sync.ai_export_token import create_token
 
     ttl = ttl_hours * 3600
-    token = create_token(ttl_seconds=ttl)
+    grace = grace_minutes * 60
+    token = create_token(ttl_seconds=ttl, grace_seconds=grace)
     host = (host or "127.0.0.1:8000").strip()
     scheme = "http"
     if host and not host.startswith("127.0.0.1") and not host.startswith("localhost") and not host.startswith("192.168.") and not host.startswith("10.") and not host.startswith("172."):
@@ -380,7 +383,8 @@ def create_ai_export_token(
         "url": url,
         "expires_at": _dt.datetime.fromtimestamp(expires_ts).strftime("%Y-%m-%d %H:%M:%S"),
         "expires_in_seconds": ttl,
-        "note": "一次性有效：外部 AI 成功读取后立即失效；超时未使用自动过期；服务重启后失效。",
+        "read_grace_seconds": grace,
+        "note": "首次读取后 %d 分钟内可重复读取（AI 抓取失败可重试）；超时未使用自动过期；服务重启后失效。" % grace_minutes,
     }
 
 
@@ -392,9 +396,10 @@ def ai_export_shared(
     scope: str = Query("full", pattern="^(core|compact|full)$", description="数据范围：core(仅总览+持仓+统计) / compact(+现金+最近20笔+曲线摘要) / full(完整)"),
     format: str = Query("json", description="json | text（text 返回 Markdown）"),
 ):
-    """免登录共享访问：凭一次性令牌读取 AI 导出数据，阅后即焚。
+    """免登录共享访问：凭令牌读取 AI 导出数据，阅后宽限期。
 
-    令牌有效期内第一次成功读取后立即作废；令牌无效/已使用/已过期一律 403。
+    首次读取后进入宽限期（默认 10 分钟），宽限期内可重复读取（AI 抓取失败可重试）；
+    超过宽限期 / 超时未用 / 无效令牌一律 403。
     """
     from src.services.ths_sync.ai_export_token import consume_token
 

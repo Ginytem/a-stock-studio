@@ -1833,6 +1833,8 @@ class ThsSyncService:
                 "hold_pnl": snap.get("hold_pnl"),
                 "hold_pnl_pct": snap.get("hold_pnl_pct"),
                 "currency": snap.get("currency") or "CNY",
+                "fee_total": snap.get("fee_total"),
+                "tax_total": snap.get("tax_total"),
                 "return_pct": None,   # 占位：下方构建对账单后回填年度收益率
                 "month_return_pct": None,  # 占位：回填最近月份收益率
             }
@@ -1867,6 +1869,57 @@ class ThsSyncService:
                         }
                     )
             export["positions"] = positions
+            # 逐标的资金穿透（full 档）：累计买入/卖出/分红 → 真实净沉没本金、回本涨幅、持仓天数
+            per_symbol: Dict[str, Dict[str, Any]] = {}
+            if scope == "full":
+                try:
+                    acc_id2 = self._find_or_create_account(DEFAULT_ACCOUNT_NAME)["id"]
+                    min_d = self.repo.min_import_trade_date(acc_id2)
+                    recs_all = self.list_local_import_records(
+                        start_date=(min_d or today).isoformat(), end_date=today.isoformat()
+                    ).get("records", [])
+                    for r in recs_all:
+                        code = str(r.get("code") or "").strip()
+                        if not code:
+                            continue
+                        t = str(r.get("record_type") or "").strip()
+                        amt = abs(float(r.get("amount") or 0))
+                        d = str(r.get("trade_date") or "")
+                        agg = per_symbol.setdefault(code, {"buy": 0.0, "sell": 0.0, "div": 0.0, "first": None})
+                        # 买入类：买入/新股入帐/股份转入/转债转入（导出金额为负=资金流出）；
+                        # 卖出类：卖出；分红类：除权除息（与账本「累计分红」口径一致，不扣股息个税）
+                        if t in ("买入", "新股入帐", "股份转入", "转债转入"):
+                            agg["buy"] += amt
+                        elif t == "卖出":
+                            agg["sell"] += amt
+                        elif t == "除权除息":
+                            agg["div"] += amt
+                        if d and (agg["first"] is None or d < agg["first"]):
+                            agg["first"] = d
+                except Exception:  # noqa: BLE001
+                    per_symbol = {}
+            for p in positions:
+                code = str(p.get("code") or "").strip()
+                agg = per_symbol.get(code)
+                price = float(p.get("price") or 0)
+                cost = float(p.get("cost") or 0)
+                if price > 0 and cost > 0:
+                    p["break_even_pct"] = round((cost - price) / price * 100, 2)
+                else:
+                    p["break_even_pct"] = None
+                if agg:
+                    p["cum_buy"] = round(agg["buy"], 2)
+                    p["cum_sell"] = round(agg["sell"], 2)
+                    p["cum_dividend"] = round(agg["div"], 2)
+                    p["net_sunk_cost"] = round(agg["buy"] - agg["sell"] - agg["div"], 2)
+                    if agg["first"]:
+                        try:
+                            first_d = date.fromisoformat(agg["first"])
+                            p["hold_days"] = max((today - first_d).days, 0)
+                        except ValueError:
+                            p["hold_days"] = None
+                    else:
+                        p["hold_days"] = None
         except Exception as exc:  # noqa: BLE001
             export["overview_error"] = str(exc)[:200]
 

@@ -30,8 +30,10 @@ _SECRETS_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "data", "ai_export_permanent.json"
 )
 
-# 允许的时钟偏差窗口数（每个 30 秒）
-_ALLOWED_WINDOW = 1
+# 允许的时钟偏差窗口数（每个 30 秒）。
+# full 档（全量流水+已清仓+曲线+对账单）构建可能超过 30 秒，放宽到 ±2 个窗口
+# （即约 90 秒内生成的验证码仍有效），避免大档生成期间验证码轮换导致 403。
+_ALLOWED_WINDOW = 2
 
 
 class _DATA_BLOB(ctypes.Structure):

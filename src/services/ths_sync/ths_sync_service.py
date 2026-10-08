@@ -17,9 +17,12 @@ import os
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import select
+
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.portfolio_service import PortfolioService
 from src.services.ths_sync.ths_client import ThsSession, ThsLoginError
+from src.storage import PortfolioDailySnapshot
 
 DEFAULT_ACCOUNT_NAME = "百福具臻"
 
@@ -916,6 +919,9 @@ class ThsSyncService:
     # 导入本地
     # ------------------------------------------------------------------
     def _find_or_create_account(self, name: str) -> Dict[str, Any]:
+        if not name or name == "默认账户":
+            # 兼容历史：旧版曾以「默认账户」为默认账户名创建过 id=3；现已统一为「百福具臻」
+            name = DEFAULT_ACCOUNT_NAME
         accounts = self.portfolio_service.list_accounts(include_inactive=False)
         for a in accounts:
             if a["name"] == name:
@@ -1122,7 +1128,12 @@ class ThsSyncService:
         return {"rebuilt": rebuilt, "errors": errors[:10]}
 
     def _reconcile_cash(self, account_id: int, target_cash: float) -> Dict[str, Any]:
-        """校正账户现金使其等于账本现金（幂等：先删旧校正记录再补差额）。"""
+        """校正账户现金使其等于账本现金（幂等：先删旧校正记录再补差额）。
+
+        现金口径：以「最近一次正常快照」的 total_cash 为当前现金（持仓同步写入，
+        口径 = 账本接口现金）。资产曲线写入的 equity_only 快照（cash=0、mv=权益点）
+        不参与比较，避免把总资产曲线点误当现金、或把正常快照现金误清零。
+        """
         # 1. 删除历史 ths现金 校正记录
         deleted = 0
         page = 1
@@ -1145,14 +1156,34 @@ class ThsSyncService:
             if page * 100 >= page_result.get("total", 0):
                 break
             page += 1
-        # 2. 当前现金
-        snapshot = self.portfolio_service.get_portfolio_snapshot(
-            account_id=account_id,
-            as_of=date.today(),
-            cost_method="fifo",
-            include_realtime=False,
-        )
-        current_cash = float(snapshot.get("accounts", [{}])[0].get("total_cash") or 0)
+        # 2. 当前现金：最近「非 equity_only」快照的 total_cash（持仓同步写入）
+        current_cash: Optional[float] = None
+        try:
+            with self.repo.db.get_session() as session:
+                snap = session.execute(
+                    select(PortfolioDailySnapshot)
+                    .where(
+                        PortfolioDailySnapshot.account_id == account_id,
+                        PortfolioDailySnapshot.snapshot_date <= date.today(),
+                        PortfolioDailySnapshot.payload.notlike("%equity_only%"),
+                    )
+                    .order_by(
+                        PortfolioDailySnapshot.snapshot_date.desc(),
+                        PortfolioDailySnapshot.id.desc(),
+                    )
+                    .limit(1)
+                ).scalar_one_or_none()
+                if snap is not None:
+                    current_cash = float(snap.total_cash or 0)
+        except Exception:  # noqa: BLE001
+            current_cash = None
+        if current_cash is None:
+            return {
+                "adjusted": False,
+                "skipped": True,
+                "note": "无正常快照，跳过现金校正",
+                "deleted_old": deleted,
+            }
         diff = target_cash - current_cash
         if abs(diff) < 1.0:
             return {"adjusted": False, "current_cash": round(current_cash, 2), "deleted_old": deleted}
@@ -1173,7 +1204,11 @@ class ThsSyncService:
         }
 
     def _import_asset_trend(self, account_id: int, points: List[Dict[str, Any]]) -> int:
-        """把账本资产曲线写入本地日快照（仅 total_equity，用于资产曲线展示）。"""
+        """把账本资产曲线写入本地日快照（仅 total_equity，用于资产曲线展示）。
+
+        防污染：当天已有「正常持仓快照」（payload 不含 equity_only）时跳过该日期，
+        避免资产曲线点覆盖正常快照的现金/市值（曾导致现金被清零、市值被写成权益点）。
+        """
         written = 0
         for p in points:
             d = str(p.get("date") or "")
@@ -1187,6 +1222,18 @@ class ThsSyncService:
             if equity <= 0:
                 continue
             try:
+                with self.repo.db.get_session() as session:
+                    existing_normal = session.execute(
+                        select(PortfolioDailySnapshot.id)
+                        .where(
+                            PortfolioDailySnapshot.account_id == account_id,
+                            PortfolioDailySnapshot.snapshot_date == as_of,
+                            PortfolioDailySnapshot.payload.notlike("%equity_only%"),
+                        )
+                        .limit(1)
+                    ).scalar_one_or_none()
+                if existing_normal is not None:
+                    continue  # 当天已有正常快照，资产曲线点不再覆盖
                 self.repo.replace_positions_lots_and_snapshot(
                     account_id=account_id,
                     snapshot_date=as_of,

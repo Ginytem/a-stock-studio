@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
+from sqlalchemy import select
 from src.config import get_config
 from src.repositories.portfolio_repo import (
     DuplicateTradeDedupHashError,
@@ -21,6 +22,7 @@ from src.repositories.portfolio_repo import (
     PortfolioBusyError as RepoPortfolioBusyError,
     PortfolioRepository,
 )
+from src.storage import PortfolioDailySnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -626,6 +628,13 @@ class PortfolioService:
                 snapshot_change_pct_map=snapshot_change_pct_map,
                 ths_price_map=effective_ths_price_map,
                 ths_name_map=ths_name_map,
+            )
+
+            # 重放现金兜底：交易流水为窗口覆盖（历史买卖缺失）且出入金未入账时，
+            # 重放现金会严重失真（典型如巨额负数）。此时以「最近正常快照」现金为准
+            # （快照现金由同步写入 = 账本接口现金），避免把失真现金写回日快照造成曲线断崖。
+            account_snapshot = self._with_snapshot_cash_fallback(
+                account, as_of_date, method, account_snapshot
             )
 
             # 若账户有持仓但市值缺失（价格获取失败，常见于非交易日），
@@ -1557,6 +1566,55 @@ class PortfolioService:
                 "points": len(series),
             },
         }
+
+    def _with_snapshot_cash_fallback(
+        self,
+        account: Any,
+        as_of_date: date,
+        cost_method: str,
+        snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """重放现金失真兜底：重放现金与最近正常快照（非 equity_only）差异过大时，
+        沿用最近正常快照现金，并同步重算 equity = cash + market_value。
+
+        原因：交易流水按窗口覆盖（历史买卖缺失）、出入金未入账时，从零重放的现金
+        会严重失真（典型如巨额负数），写回日快照会造成曲线断崖与汇总现金错误。
+        正常场景（当天有真实交易）重放现金与快照现金差异很小，不会触发兜底。
+        """
+        replayed_cash = float(snapshot.get("total_cash") or 0.0)
+        mv = float(snapshot.get("total_market_value") or 0.0)
+        try:
+            with self.repo.db.get_session() as session:
+                snap = session.execute(
+                    select(PortfolioDailySnapshot)
+                    .where(
+                        PortfolioDailySnapshot.account_id == account.id,
+                        PortfolioDailySnapshot.snapshot_date <= as_of_date,
+                        PortfolioDailySnapshot.cost_method == cost_method,
+                        PortfolioDailySnapshot.payload.notlike("%equity_only%"),
+                    )
+                    .order_by(
+                        PortfolioDailySnapshot.snapshot_date.desc(),
+                        PortfolioDailySnapshot.id.desc(),
+                    )
+                    .limit(1)
+                ).scalar_one_or_none()
+            if snap is None:
+                return snapshot
+            prev_cash = float(snap.total_cash or 0.0)
+            if prev_cash > 0 and abs(replayed_cash - prev_cash) > 1000.0:
+                fallback_cash = prev_cash
+                fallback_equity = fallback_cash + mv
+                snapshot["total_cash"] = fallback_cash
+                snapshot["total_equity"] = fallback_equity
+                for key in ("public", "payload"):
+                    pub = snapshot.get(key)
+                    if isinstance(pub, dict):
+                        pub["total_cash"] = round(fallback_cash, 6)
+                        pub["total_equity"] = round(fallback_equity, 6)
+        except Exception:  # noqa: BLE001 - 兜底失败保持重放值，不阻断主流程
+            pass
+        return snapshot
 
     def _replay_account(
         self,

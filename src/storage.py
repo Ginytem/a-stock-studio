@@ -641,6 +641,32 @@ class PortfolioImportRecord(Base):
     )
 
 
+class PortfolioClosedPosition(Base):
+    """账本导出文件「已清仓」sheet 的完整清仓记录。
+
+    每次导入全量覆盖（导出文件已清仓为全量快照），供 AI 导出/复盘分析
+    使用（清仓胜率、处置效应、跑赢大盘率等）。
+    """
+
+    __tablename__ = 'portfolio_closed_positions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    close_date = Column(Date, nullable=False, index=True)  # 清仓日期
+    symbol = Column(String(16), index=True)
+    name = Column(String(64))
+    total_pnl = Column(Float, default=0.0)  # 总盈亏（元）
+    pnl_ratio = Column(Float, default=0.0)  # 盈亏比（%）
+    market_benchmark = Column(Float, default=0.0)  # 同期大盘（%）
+    beat_market = Column(String(8))  # 跑赢大盘：是/否
+    avg_cost = Column(Float, default=0.0)  # 买入均价
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_portfolio_closed_account_date', 'account_id', 'close_date'),
+    )
+
+
 class PortfolioImportRecordBackup(Base):
     """账本导出流水导入前的备份快照（窗口覆盖保护，防止误清历史）。
 

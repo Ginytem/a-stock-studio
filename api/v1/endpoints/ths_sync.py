@@ -316,13 +316,14 @@ def _render_ai_export_text(data: dict, days: int = 90, curve_days: int = 180) ->
                                            c.get("amount", ""), c.get("note", ""), c.get("account_name", "")))
     lines.append("")
     stats = data.get("recent_trade_stats") or {}
-    lines.append("## 最近 %d 天交易统计" % days)
+    is_full = (data.get("meta") or {}).get("trade_scope") == "full_history"
+    lines.append("## %s交易统计" % ("全部历史" if is_full else "最近 %d 天" % days))
     lines.append("")
     for k, v in stats.items():
         lines.append("- %s: %s" % (k, v))
     lines.append("")
     tr = data.get("recent_trades") or []
-    lines.append("## 最近 %d 天交易流水（%d 条）" % (days, len(tr)))
+    lines.append("## %s交易流水（%d 条，full 档为账户全量历史）" % ("全部历史" if is_full else "最近 %d 天" % days, len(tr)))
     lines.append("")
     if tr:
         lines.append("| 日期 | 类别 | 代码 | 名称 | 数量 | 价格 | 金额 | 费用 | 备注 |")
@@ -333,6 +334,50 @@ def _render_ai_export_text(data: dict, days: int = 90, curve_days: int = 180) ->
                 r.get("name", ""), r.get("quantity", ""), r.get("price", ""),
                 r.get("amount", ""), r.get("fee", ""), r.get("note", "")))
     lines.append("")
+    dv = data.get("dividends") or {}
+    if dv:
+        lines.append("## 分红记录（%d 笔，合计 %s 元）" % (dv.get("count", 0), dv.get("total", 0)))
+        lines.append("")
+        items = dv.get("items") or []
+        if items:
+            lines.append("| 日期 | 代码 | 名称 | 金额 | 备注 |")
+            lines.append("|---|---|---|---|---|")
+            for it in items:
+                lines.append("| %s | %s | %s | %s | %s |" % (
+                    it.get("date", ""), it.get("code", ""), it.get("name", ""),
+                    it.get("amount", ""), it.get("note", "")))
+            lines.append("")
+    cf = data.get("cash_flows") or {}
+    if cf:
+        lines.append("## 出入金记录（%d 笔，入 %s / 出 %s / 净 %s 元）" % (
+            cf.get("count", 0), cf.get("total_in", 0), cf.get("total_out", 0), cf.get("net", 0)))
+        lines.append("")
+        items = cf.get("items") or []
+        if items:
+            lines.append("| 日期 | 方向 | 金额 |")
+            lines.append("|---|---|---|")
+            for it in items:
+                lines.append("| %s | %s | %s |" % (
+                    it.get("date", ""), "入金" if it.get("direction") == "in" else "出金", it.get("amount", "")))
+            lines.append("")
+    cp = data.get("closed_positions") or {}
+    if cp:
+        cs = cp.get("stats") or {}
+        lines.append("## 已清仓记录（%d 笔）" % cs.get("count", 0))
+        lines.append("")
+        for k, v in cs.items():
+            lines.append("- %s: %s" % (k, v))
+        lines.append("")
+        citems = cp.get("items") or []
+        if citems:
+            lines.append("| 清仓日期 | 代码 | 名称 | 总盈亏 | 盈亏比% | 同期大盘% | 跑赢大盘 | 买入均价 |")
+            lines.append("|---|---|---|---|---|---|---|---|")
+            for it in citems:
+                lines.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                    it.get("close_date", ""), it.get("symbol", ""), it.get("name", ""),
+                    it.get("total_pnl", ""), it.get("pnl_ratio", ""), it.get("market_benchmark", ""),
+                    it.get("beat_market", ""), it.get("avg_cost", "")))
+            lines.append("")
     ec = (data.get("equity_curve") or {}).get("summary") or {}
     lines.append("## 资产曲线（最近 %d 天）" % curve_days)
     lines.append("")

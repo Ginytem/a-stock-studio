@@ -1515,6 +1515,57 @@ class ThsSyncService:
         for p in positions:
             total_mv += p["quantity"] * p["cost"]
             total_cost += p["quantity"] * p["cost"]
+
+        # 已清仓 sheet（可选）：清仓日期/代码/名称/总盈亏/盈亏比/同期大盘/跑赢大盘/买入均价
+        closed: List[Dict[str, Any]] = []
+        if "已清仓" in sheet_names:
+            cl_ws = wb["已清仓"]
+            cl_header = [str(c or "").strip() for c in next(cl_ws.iter_rows(values_only=True))]
+
+            def cl_col(name: str) -> int:
+                for i, h in enumerate(cl_header):
+                    if name in h:
+                        return i
+                return -1
+
+            ci_date = cl_col("清仓日期")
+            ci_code = cl_col("代码")
+            ci_name = cl_col("名称")
+            ci_pnl = cl_col("总盈亏")
+            ci_ratio = cl_col("盈亏比")
+            ci_mkt = cl_col("同期大盘")
+            ci_beat = cl_col("跑赢大盘")
+            ci_cost = cl_col("买入均价")
+            for row in cl_ws.iter_rows(min_row=2, values_only=True):
+                code = str(row[ci_code] or "").strip() if ci_code >= 0 else ""
+                if not code or code == "汇总":
+                    continue
+                try:
+                    pnl = float(row[ci_pnl] or 0) if ci_pnl >= 0 else 0.0
+                except (TypeError, ValueError):
+                    pnl = 0.0
+
+                def _f(i: int) -> Optional[float]:
+                    if i < 0:
+                        return None
+                    try:
+                        return float(row[i] or 0)
+                    except (TypeError, ValueError):
+                        return None
+
+                closed.append(
+                    {
+                        "close_date": str(row[ci_date] or "").strip() if ci_date >= 0 else "",
+                        "symbol": code,
+                        "name": str(row[ci_name] or "").strip() if ci_name >= 0 else "",
+                        "total_pnl": pnl,
+                        "pnl_ratio": _f(ci_ratio),
+                        "market_benchmark": _f(ci_mkt),
+                        "beat_market": str(row[ci_beat] or "").strip() if ci_beat >= 0 else "",
+                        "avg_cost": _f(ci_cost),
+                    }
+                )
+
         return {
             "sheets": sheet_names,
             "position_count": len(positions),
@@ -1525,6 +1576,8 @@ class ThsSyncService:
             "trade_stats": stats,
             "cash_in_total": round(cash_in_total, 2),
             "cash_out_total": round(cash_out_total, 2),
+            "closed_positions": closed,
+            "closed_count": len(closed),
         }
 
     def _parse_import_records(self, file_path: str) -> List[Dict[str, Any]]:
@@ -1634,8 +1687,8 @@ class ThsSyncService:
                 window_start = file_min
             else:
                 window_start = _n_trading_days_before(local_max, WINDOW_TRADING_DAYS)
-            # 兜底提示：文件最新日期早于本地最新，说明导出的不是最新
-            if file_max < (local_max or date.today()):
+            # 兜底提示：文件最新日期早于本地最新，说明导出的不是最新（首次导入无本地记录时不提示）
+            if local_max is not None and file_max < local_max:
                 import_warning = (
                     f"导出文件最新记录仅到 {file_max.isoformat()}，本地已到 "
                     f"{local_max.isoformat()}，本次窗口仅覆盖最近{WINDOW_TRADING_DAYS}个交易日，"
@@ -1649,6 +1702,12 @@ class ThsSyncService:
             import_record_count = win["written"]
             import_window = win["window_start"]
             import_kept_before = win["kept_before_window"]
+        # 已清仓全量覆盖（导出文件为全量快照；解析不到时保持原库不动）
+        closed_count = 0
+        if parsed.get("closed_positions"):
+            closed_count = self.repo.replace_closed_positions(
+                account["id"], parsed["closed_positions"]
+            )
         cash_result: Dict[str, Any] = {}
         if self.client.is_logged_in():
             try:
@@ -1684,6 +1743,7 @@ class ThsSyncService:
             "import_window_start": import_window,
             "import_kept_before": import_kept_before,
             "import_warning": import_warning,
+            "closed_count": closed_count,
         }
 
     def build_ai_export(self, *, days: int = 90, curve_days: int = 180, scope: str = "full") -> Dict[str, Any]:
@@ -1703,6 +1763,9 @@ class ThsSyncService:
                 "generated_at": today.isoformat(),
                 "source": "同花顺投资账本（实时接口 + 导出文件）+ 腾讯行情",
                 "account": DEFAULT_ACCOUNT_NAME,
+                "scope": scope,
+                "trade_scope": "full_history" if scope == "full" else f"last_{days}_days",
+                "include": ["overview", "positions", "recent_trades", "equity_curve", "statement"],
             }
         }
 
@@ -1765,9 +1828,14 @@ class ThsSyncService:
         except Exception as exc:  # noqa: BLE001
             export["cash_ledger_error"] = str(exc)[:200]
 
-        # 3. 交易流水（最近 days 天，含银证转账/逆回购/分红/税费全类别）
+        # 3. 交易流水（full 档全量，其余最近 days 天；含银证转账/逆回购/分红/税费全类别）
         try:
-            d0 = (today - timedelta(days=days)).isoformat()
+            if scope == "full":
+                account_id = self._find_or_create_account(DEFAULT_ACCOUNT_NAME)["id"]
+                min_d = self.repo.min_import_trade_date(account_id)
+                d0 = (min_d or (today - timedelta(days=days))).isoformat()
+            else:
+                d0 = (today - timedelta(days=days)).isoformat()
             recs = self.list_local_import_records(start_date=d0, end_date=today.isoformat())
             records = recs.get("records", [])
             export["recent_trades"] = records
@@ -1775,23 +1843,84 @@ class ThsSyncService:
             stats: Dict[str, float] = {
                 "buy_amount": 0.0, "sell_amount": 0.0,
                 "cash_in": 0.0, "cash_out": 0.0, "dividend": 0.0,
+                "buy_count": 0, "sell_count": 0, "cash_in_count": 0,
+                "cash_out_count": 0, "dividend_count": 0,
             }
             for r in records:
                 t = str(r.get("record_type") or "")
                 amt = float(r.get("amount") or 0)
                 if t in ("买入",):
                     stats["buy_amount"] += abs(amt)
+                    stats["buy_count"] += 1
                 elif t == "卖出":
                     stats["sell_amount"] += abs(amt)
+                    stats["sell_count"] += 1
                 elif t in self._EXPORT_CATEGORY_CASH_IN:
                     stats["cash_in"] += abs(amt)
+                    stats["cash_in_count"] += 1
                 elif t in self._EXPORT_CATEGORY_CASH_OUT:
                     stats["cash_out"] += abs(amt)
+                    stats["cash_out_count"] += 1
                 elif "除息" in t or "分红" in t or "股息" in t:
                     stats["dividend"] += abs(amt)
+                    stats["dividend_count"] += 1
             export["recent_trade_stats"] = {k: round(v, 2) for k, v in stats.items()}
         except Exception as exc:  # noqa: BLE001
             export["recent_trades_error"] = str(exc)[:200]
+
+        # 3.1 分红明细 + 出入金明细（full 档，基于全量流水拆分）
+        if scope == "full":
+            try:
+                div_items, cf_items = [], []
+                for r in records:
+                    t = str(r.get("record_type") or "")
+                    amt = float(r.get("amount") or 0)
+                    item = {
+                        "date": str(r.get("trade_date") or ""),
+                        "code": str(r.get("code") or ""),
+                        "name": str(r.get("name") or ""),
+                        "amount": round(amt, 2),
+                        "note": str(r.get("note") or ""),
+                    }
+                    if "除息" in t or "分红" in t or "股息" in t:
+                        div_items.append(item)
+                    elif t in self._EXPORT_CATEGORY_CASH_IN:
+                        item["direction"] = "in"
+                        cf_items.append(item)
+                    elif t in self._EXPORT_CATEGORY_CASH_OUT:
+                        item["direction"] = "out"
+                        cf_items.append(item)
+                div_items.sort(key=lambda x: str(x["date"]))
+                cf_items.sort(key=lambda x: str(x["date"]))
+                total_in = round(sum(i["amount"] for i in cf_items if i.get("direction") == "in"), 2)
+                total_out = round(sum(i["amount"] for i in cf_items if i.get("direction") == "out"), 2)
+                if total_out < 0:
+                    total_out = -total_out  # 出金统一取正数，净额 = 入 - 出
+                export["dividends"] = {
+                    "count": len(div_items),
+                    "total": round(sum(i["amount"] for i in div_items), 2),
+                    "items": div_items,
+                }
+                export["cash_flows"] = {
+                    "count": len(cf_items),
+                    "total_in": total_in,
+                    "total_out": total_out,
+                    "net": round(total_in - total_out, 2),
+                    "items": cf_items,
+                }
+            except Exception as exc:  # noqa: BLE001
+                export["dividends_error"] = str(exc)[:200]
+
+        # 3.2 已清仓记录 + 统计（full 档）
+        if scope == "full":
+            try:
+                account_id = self._find_or_create_account(DEFAULT_ACCOUNT_NAME)["id"]
+                export["closed_positions"] = {
+                    "stats": self.repo.closed_position_stats(account_id),
+                    "items": self.repo.list_closed_positions(account_id),
+                }
+            except Exception as exc:  # noqa: BLE001
+                export["closed_positions_error"] = str(exc)[:200]
 
         # 4. 资产曲线（最近 curve_days 天）
         try:

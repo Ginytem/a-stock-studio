@@ -18,6 +18,7 @@ from src.storage import (
     DatabaseManager,
     PortfolioAccount,
     PortfolioCashLedger,
+    PortfolioClosedPosition,
     PortfolioCorporateAction,
     PortfolioDailySnapshot,
     PortfolioFxRate,
@@ -305,6 +306,120 @@ class PortfolioRepository:
                 )
             ).scalar_one_or_none()
             return row if isinstance(row, date) else None
+
+    def min_import_trade_date(self, account_id: int) -> Optional[date]:
+        """返回该账户本地导入流水的最小成交日期（无记录返回 None）。"""
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(func.min(PortfolioImportRecord.trade_date)).where(
+                    PortfolioImportRecord.account_id == account_id
+                )
+            ).scalar_one_or_none()
+            return row if isinstance(row, date) else None
+
+    # ------------------------------------------------------------------
+    # 已清仓（账本导出「已清仓」sheet，全量快照覆盖）
+    # ------------------------------------------------------------------
+    def replace_closed_positions(self, account_id: int, rows: List[Dict[str, Any]]) -> int:
+        """全量覆盖该账户已清仓记录（导出文件为全量快照）。返回写入条数。"""
+        with self.portfolio_write_session() as session:
+            session.execute(
+                delete(PortfolioClosedPosition).where(
+                    PortfolioClosedPosition.account_id == account_id
+                )
+            )
+            for r in rows:
+                try:
+                    close_date = r.get("close_date")
+                    if isinstance(close_date, str):
+                        close_date = date.fromisoformat(close_date)
+                except (TypeError, ValueError):
+                    close_date = None
+                if close_date is None:
+                    continue
+                session.add(
+                    PortfolioClosedPosition(
+                        account_id=account_id,
+                        close_date=close_date,
+                        symbol=str(r.get("symbol") or ""),
+                        name=str(r.get("name") or ""),
+                        total_pnl=float(r.get("total_pnl") or 0.0),
+                        pnl_ratio=float(r.get("pnl_ratio") or 0.0),
+                        market_benchmark=float(r.get("market_benchmark") or 0.0),
+                        beat_market=str(r.get("beat_market") or ""),
+                        avg_cost=float(r.get("avg_cost") or 0.0),
+                    )
+                )
+            session.flush()
+            return len(rows)
+
+    def list_closed_positions(self, account_id: int, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """按清仓日期倒序返回已清仓记录。"""
+        with self.db.get_session() as session:
+            q = (
+                select(PortfolioClosedPosition)
+                .where(PortfolioClosedPosition.account_id == account_id)
+                .order_by(desc(PortfolioClosedPosition.close_date), desc(PortfolioClosedPosition.id))
+            )
+            if limit:
+                q = q.limit(limit)
+            rows = session.execute(q).scalars().all()
+            return [
+                {
+                    "close_date": r.close_date.isoformat() if r.close_date else None,
+                    "symbol": r.symbol,
+                    "name": r.name,
+                    "total_pnl": r.total_pnl,
+                    "pnl_ratio": r.pnl_ratio,
+                    "market_benchmark": r.market_benchmark,
+                    "beat_market": r.beat_market,
+                    "avg_cost": r.avg_cost,
+                }
+                for r in rows
+            ]
+
+    def closed_position_stats(self, account_id: int) -> Dict[str, Any]:
+        """已清仓统计：笔数/胜率/总盈亏/跑赢大盘率/平均持仓（盈亏比分布）。"""
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(PortfolioClosedPosition).where(
+                    PortfolioClosedPosition.account_id == account_id
+                )
+            ).scalars().all()
+        total = len(rows)
+        if total == 0:
+            return {
+                "count": 0, "win_count": 0, "win_rate": None, "total_pnl": 0.0,
+                "total_win_pnl": 0.0, "total_loss_pnl": 0.0, "avg_pnl_ratio": None,
+                "beat_market_count": 0, "beat_market_rate": None, "max_pnl": None, "max_loss": None,
+            }
+        win = [r for r in rows if (r.total_pnl or 0) > 0]
+        loss = [r for r in rows if (r.total_pnl or 0) <= 0]
+        # 「跑赢大盘」列在账本导出中为数值（如 0.0294 = 跑赢同期大盘 2.94 个百分点），
+        # 正数视为跑赢；兼容旧导出中的「是/否」文本
+        def _beat_ok(v) -> bool:
+            s = str(v or "").strip()
+            if s in ("是", "Y", "y", "true", "TRUE"):
+                return True
+            try:
+                return float(s) > 0
+            except (TypeError, ValueError):
+                return False
+        beat = [r for r in rows if _beat_ok(r.beat_market)]
+        ratios = [r.pnl_ratio for r in rows if r.pnl_ratio is not None]
+        return {
+            "count": total,
+            "win_count": len(win),
+            "win_rate": round(len(win) / total * 100, 2),
+            "total_pnl": round(sum(r.total_pnl or 0 for r in rows), 2),
+            "total_win_pnl": round(sum(r.total_pnl or 0 for r in win), 2),
+            "total_loss_pnl": round(sum(r.total_pnl or 0 for r in loss), 2),
+            "avg_pnl_ratio": round(sum(ratios) / len(ratios), 2) if ratios else None,
+            "beat_market_count": len(beat),
+            "beat_market_rate": round(len(beat) / total * 100, 2),
+            "max_pnl": max((r.pnl_ratio for r in win if r.pnl_ratio is not None), default=None),
+            "max_loss": min((r.pnl_ratio for r in loss if r.pnl_ratio is not None), default=None),
+        }
 
     def backup_import_records(self, account_id: int) -> int:
         """把该账户当前导入流水整体备份到备份表（先清空该账户旧备份，保留最近一份）。"""

@@ -1257,6 +1257,14 @@ class PortfolioService:
         next_month = date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)
         date_to = next_month - timedelta(days=1)
         method = self._normalize_cost_method(cost_method)
+        if account_id is None:
+            # 缺省账户：优先实际使用账户「百福具臻」（历史曾以「默认账户」创建，已停用）
+            accs = self.repo.list_accounts(include_inactive=False)
+            if accs:
+                account_id = next(
+                    (a.id for a in accs if getattr(a, "name", "") == "百福具臻"),
+                    accs[0].id,
+                )
 
         trades, _ = self.repo.query_trades(
             account_id=account_id,
@@ -1319,13 +1327,39 @@ class PortfolioService:
                 sell_amount += amt
                 sell_fee += fee
 
+        # 真实出入金：账本导出流水中的银证转账（银行转证券/银行转存=入金，
+        # 证券转银行/银行转取=出金）。cash_ledger 只有初始现金/会计校正，不代表出入金。
         inflow = 0.0
         outflow = 0.0
-        for c in cash_rows:
-            if (c.direction or "").strip().lower() == "in":
-                inflow += float(c.amount or 0)
-            else:
-                outflow += float(c.amount or 0)
+        weighted_inflow = 0.0
+        try:
+            from src.storage import PortfolioImportRecord
+            with self.repo.db.get_session() as session:
+                ir_rows = session.execute(
+                    select(PortfolioImportRecord).where(
+                        PortfolioImportRecord.account_id == account_id,
+                        PortfolioImportRecord.trade_date >= date_from,
+                        PortfolioImportRecord.trade_date <= date_to,
+                        PortfolioImportRecord.record_type.in_(
+                            ("银行转证券", "银行转存", "证券转银行", "银行转取")
+                        ),
+                    )
+                ).scalars().all()
+            days_in_month = (date_to - date_from).days + 1
+            for r in ir_rows:
+                amt = abs(float(r.amount or 0))  # 导出文件转出金额为负数，取绝对值
+                rt = (r.record_type or "").strip()
+                remain = (date_to - r.trade_date).days + 1
+                if rt in ("银行转证券", "银行转存"):
+                    inflow += amt
+                    weighted_inflow += amt * (remain / days_in_month)
+                else:
+                    outflow += amt
+                    weighted_inflow -= amt * (remain / days_in_month)
+        except Exception:  # noqa: BLE001 - 出入金缺失时退化为总资产口径
+            inflow = 0.0
+            outflow = 0.0
+            weighted_inflow = 0.0
 
         dividends: List[Dict[str, Any]] = []
         for ca in ca_rows:
@@ -1355,8 +1389,16 @@ class PortfolioService:
         begin_equity = _eq(begin_snap)
         end_equity = _eq(end_snap)
         ret_pct = None
+        # Modified Dietz 口径（剔除期间出入金）：自己转入/转出的资金不算盈亏；
+        # 无出入金时退化为总资产环比
         if begin_equity and begin_equity != 0 and end_equity is not None:
-            ret_pct = round((end_equity - begin_equity) / begin_equity * 100, 2)
+            net_inflow = inflow - outflow
+            if abs(net_inflow) > 0.01:
+                denom = begin_equity + weighted_inflow
+                if abs(denom) > 1e-9:
+                    ret_pct = round((end_equity - begin_equity - net_inflow) / denom * 100, 2)
+            else:
+                ret_pct = round((end_equity - begin_equity) / begin_equity * 100, 2)
 
         return {
             "month": month,
@@ -1453,8 +1495,17 @@ class PortfolioService:
                 "returnPct": a.get("return_pct"),
             })
         ret_pct = None
-        if begin_equity and begin_equity != 0 and end_equity is not None:
-            ret_pct = round((end_equity - begin_equity) / begin_equity * 100, 2)
+        # 年度收益率 = 各月收益率复合（与月度明细、手工计算一致）；
+        # 月度已按 Modified Dietz 剔除出入金，复合自然不含出入金影响
+        comp = 1.0
+        valid_months = 0
+        for m in months:
+            rp = m.get("return_pct")
+            if rp is not None:
+                comp *= 1.0 + float(rp) / 100.0
+                valid_months += 1
+        if valid_months:
+            ret_pct = round((comp - 1.0) * 100.0, 2)
         return {
             "year": str(year),
             "trades": {

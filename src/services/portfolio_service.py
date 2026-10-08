@@ -1360,6 +1360,14 @@ class PortfolioService:
                 "sell_amount": round(sell_amount, 2),
                 "sell_fee": round(sell_fee, 2),
                 "net_cash_outflow": round(buy_amount + buy_fee - sell_amount, 2),
+                # camelCase 兼容（前端契约）
+                "buyCount": buy_count,
+                "buyAmount": round(buy_amount, 2),
+                "buyFee": round(buy_fee, 2),
+                "sellCount": sell_count,
+                "sellAmount": round(sell_amount, 2),
+                "sellFee": round(sell_fee, 2),
+                "netCashOutflow": round(buy_amount + buy_fee - sell_amount, 2),
             },
             "cash": {
                 "inflow": round(inflow, 2),
@@ -1371,6 +1379,10 @@ class PortfolioService:
                 "begin_equity": begin_equity,
                 "end_equity": end_equity,
                 "return_pct": ret_pct,
+                # camelCase 兼容（前端契约）
+                "beginEquity": begin_equity,
+                "endEquity": end_equity,
+                "returnPct": ret_pct,
             },
             "details": sorted(details, key=lambda d: d["date"]),
         }
@@ -1424,6 +1436,12 @@ class PortfolioService:
                 "cash_net": round(float(c.get("inflow") or 0) - float(c.get("outflow") or 0), 2),
                 "dividend_count": int(d.get("count") or 0),
                 "return_pct": a.get("return_pct"),
+                # camelCase 兼容（前端契约）
+                "buyAmount": round(float(t.get("buy_amount") or 0), 2),
+                "sellAmount": round(float(t.get("sell_amount") or 0), 2),
+                "cashNet": round(float(c.get("inflow") or 0) - float(c.get("outflow") or 0), 2),
+                "dividendCount": int(d.get("count") or 0),
+                "returnPct": a.get("return_pct"),
             })
         ret_pct = None
         if begin_equity and begin_equity != 0 and end_equity is not None:
@@ -1438,10 +1456,26 @@ class PortfolioService:
                 "sell_amount": round(sell_amount, 2),
                 "sell_fee": round(sell_fee, 2),
                 "net_cash_outflow": round(buy_amount + buy_fee - sell_amount, 2),
+                # camelCase 兼容（前端契约）
+                "buyCount": buy_count,
+                "buyAmount": round(buy_amount, 2),
+                "buyFee": round(buy_fee, 2),
+                "sellCount": sell_count,
+                "sellAmount": round(sell_amount, 2),
+                "sellFee": round(sell_fee, 2),
+                "netCashOutflow": round(buy_amount + buy_fee - sell_amount, 2),
             },
             "cash": {"inflow": round(cash_in, 2), "outflow": round(cash_out, 2), "net": round(cash_in - cash_out, 2)},
             "dividends": {"count": len(dividends), "items": dividends},
-            "asset": {"begin_equity": begin_equity, "end_equity": end_equity, "return_pct": ret_pct},
+            "asset": {
+                "begin_equity": begin_equity,
+                "end_equity": end_equity,
+                "return_pct": ret_pct,
+                # camelCase 兼容（前端契约）
+                "beginEquity": begin_equity,
+                "endEquity": end_equity,
+                "returnPct": ret_pct,
+            },
             "details": sorted(details, key=lambda d: d["date"]),
             "months": months,
         }
@@ -1498,6 +1532,11 @@ class PortfolioService:
                 "total_market_value": round(mv, 2),
                 "total_cash": round(cash, 2),
                 "drawdown_pct": round(dd, 2),
+                # camelCase 兼容（前端契约）
+                "totalEquity": round(eq, 2),
+                "totalMarketValue": round(mv, 2),
+                "totalCash": round(cash, 2),
+                "drawdownPct": round(dd, 2),
             })
         ret_pct = None
         if first_eq and first_eq != 0 and last_eq is not None:
@@ -1509,6 +1548,12 @@ class PortfolioService:
                 "end_equity": round(last_eq, 2) if last_eq is not None else None,
                 "return_pct": ret_pct,
                 "max_drawdown_pct": round(max_dd, 2) if series else None,
+                "points": len(series),
+                # camelCase 兼容（前端契约）
+                "beginEquity": round(first_eq, 2) if first_eq is not None else None,
+                "endEquity": round(last_eq, 2) if last_eq is not None else None,
+                "returnPct": ret_pct,
+                "maxDrawdownPct": round(max_dd, 2) if series else None,
                 "points": len(series),
             },
         }

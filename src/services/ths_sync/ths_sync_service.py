@@ -677,6 +677,14 @@ class ThsSyncService:
                 "sell_amount": round(sell_amount, 2),
                 "sell_fee": round(sell_fee, 2),
                 "net_cash_outflow": round(buy_amount + buy_fee - sell_amount, 2),
+                # camelCase 兼容（前端契约）
+                "buyCount": buy_count,
+                "buyAmount": round(buy_amount, 2),
+                "buyFee": round(buy_fee, 2),
+                "sellCount": sell_count,
+                "sellAmount": round(sell_amount, 2),
+                "sellFee": round(sell_fee, 2),
+                "netCashOutflow": round(buy_amount + buy_fee - sell_amount, 2),
             },
             "cash": {"inflow": round(cash_in, 2), "outflow": round(cash_out, 2), "net": round(cash_in - cash_out, 2)},
             "dividends": {
@@ -693,6 +701,12 @@ class ThsSyncService:
                 "return_pct": ret_pct,
                 "begin_date": begin_snap.snapshot_date.isoformat() if begin_snap else None,
                 "end_date": end_snap.snapshot_date.isoformat() if end_snap else None,
+                # camelCase 兼容（前端契约）
+                "beginEquity": begin_equity,
+                "endEquity": end_equity,
+                "returnPct": ret_pct,
+                "beginDate": begin_snap.snapshot_date.isoformat() if begin_snap else None,
+                "endDate": end_snap.snapshot_date.isoformat() if end_snap else None,
             },
             "details": sorted(
                 details,
@@ -764,7 +778,18 @@ class ThsSyncService:
                     "end_equity": a.get("end_equity"),
                     "begin_date": a.get("begin_date"),
                     "end_date": a.get("end_date"),
+                    # camelCase 兼容（前端契约）
+                    "beginEquity": a.get("begin_equity"),
+                    "endEquity": a.get("end_equity"),
+                    "beginDate": a.get("begin_date"),
+                    "endDate": a.get("end_date"),
                 },
+                # camelCase 兼容（前端契约）
+                "buyAmount": round(float(t.get("buy_amount") or 0), 2),
+                "sellAmount": round(float(t.get("sell_amount") or 0), 2),
+                "cashNet": round(float(c.get("inflow") or 0) - float(c.get("outflow") or 0), 2),
+                "dividendCount": int(d.get("count") or 0),
+                "returnPct": a.get("return_pct"),
             })
         ret_pct = None
         begin_date_iso = end_date_iso = None
@@ -796,6 +821,14 @@ class ThsSyncService:
                 "sell_amount": round(sell_amount, 2),
                 "sell_fee": round(sell_fee, 2),
                 "net_cash_outflow": round(buy_amount + buy_fee - sell_amount, 2),
+                # camelCase 兼容（前端契约）
+                "buyCount": buy_count,
+                "buyAmount": round(buy_amount, 2),
+                "buyFee": round(buy_fee, 2),
+                "sellCount": sell_count,
+                "sellAmount": round(sell_amount, 2),
+                "sellFee": round(sell_fee, 2),
+                "netCashOutflow": round(buy_amount + buy_fee - sell_amount, 2),
             },
             "cash": {"inflow": round(cash_in, 2), "outflow": round(cash_out, 2), "net": round(cash_in - cash_out, 2)},
             "dividends": {
@@ -806,7 +839,15 @@ class ThsSyncService:
                     reverse=True,
                 ),
             },
-            "asset": {"begin_equity": begin_equity, "end_equity": end_equity, "return_pct": ret_pct},
+            "asset": {
+                "begin_equity": begin_equity,
+                "end_equity": end_equity,
+                "return_pct": ret_pct,
+                # camelCase 兼容（前端契约）
+                "beginEquity": begin_equity,
+                "endEquity": end_equity,
+                "returnPct": ret_pct,
+            },
             "details": sorted(
                 details,
                 key=lambda d: (str(d.get("date") or ""), str(d.get("time") or "")),

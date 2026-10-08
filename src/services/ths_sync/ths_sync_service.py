@@ -1833,6 +1833,8 @@ class ThsSyncService:
                 "hold_pnl": snap.get("hold_pnl"),
                 "hold_pnl_pct": snap.get("hold_pnl_pct"),
                 "currency": snap.get("currency") or "CNY",
+                "return_pct": None,   # 占位：下方构建对账单后回填年度收益率
+                "month_return_pct": None,  # 占位：回填最近月份收益率
             }
             positions = []
             for acc in accounts:
@@ -2015,6 +2017,12 @@ class ThsSyncService:
                 "return_pct": aa.get("return_pct"),
                 "months": annual.get("months"),
             }
+            # 回填 overview 收益率（AI 侧常只读 overview 找收益率）
+            if isinstance(export.get("overview"), dict):
+                if aa.get("return_pct") is not None:
+                    export["overview"]["return_pct"] = aa.get("return_pct")
+                if months:
+                    export["overview"]["month_return_pct"] = months[0].get("return_pct")
         except Exception as exc:  # noqa: BLE001
             export["statement_error"] = str(exc)[:200]
 

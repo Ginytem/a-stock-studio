@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
-"""AI 数据导出一次性令牌（阅后宽限期）。
+"""AI 数据导出令牌。
 
+一次性令牌（阅后宽限期）：
 - 生成：登录态调用 token 接口生成，有效期默认 1 小时（可配 1-24 小时）；
 - 使用：外部 AI 携带 token 访问 shared 接口，成功读取后进入宽限期
   （默认 10 分钟，可配 1-60 分钟），宽限期内可重复读取（AI 抓取失败可重试）；
   超过宽限期或超时未用即失效；
 - 过期：超时未用自动失效；服务重启后内存清空（令牌全部失效，更安全）。
+
+固定接口密钥（长期有效，持久化）：
+- 生成：登录态调用 token/permanent 接口生成，密钥只显示一次；
+- 使用：外部 AI 携带 key 访问 static 接口，每次访问实时生成最新数据；
+- 持久化：密钥哈希写入 data/ai_export_permanent.json，服务重启不失效；
+- 作废：重新生成即作废旧密钥（单密钥模式）；也可通过 revoke 主动作废。
 """
 
 import secrets
@@ -98,3 +105,50 @@ def active_count() -> int:
     with _lock:
         _purge_locked()
         return len(_tokens)
+
+
+# ---------------------------------------------------------------------------
+# 固定接口密钥（TOTP，RFC 6238，加密持久化到 data/ 下）
+# 实现见 ai_totp.py（DPAPI 主密钥 + Fernet 加密 TOTP 密钥，全密文落盘）
+# ---------------------------------------------------------------------------
+
+
+def create_permanent_token() -> str:
+    """生成新的 TOTP Base32 密钥（单密钥模式：旧密钥自动作废）。返回明文密钥（仅显示一次）。"""
+    from src.services.ths_sync import ai_totp
+
+    return ai_totp.generate_secret()
+
+
+def verify_permanent_token(code: str) -> bool:
+    """校验 TOTP 验证码（±1 个 30 秒窗口）。"""
+    from src.services.ths_sync import ai_totp
+
+    return ai_totp.verify_code(code)
+
+
+def revoke_permanent_token() -> None:
+    """作废固定密钥。"""
+    from src.services.ths_sync import ai_totp
+
+    ai_totp.revoke_secret()
+
+
+def permanent_info():
+    """查询固定密钥的元信息（不含密钥本身）。无密钥时返回 None。"""
+    from src.services.ths_sync import ai_totp
+
+    return ai_totp.secret_info()
+
+
+def permanent_current_code() -> str:
+    """当前 30 秒窗口的 6 位验证码（服务端代算）。无密钥返回空串。"""
+    from src.services.ths_sync import ai_totp
+
+    return ai_totp.current_code() or ""
+
+
+def permanent_provisioning_uri(secret: str) -> str:
+    from src.services.ths_sync import ai_totp
+
+    return ai_totp.provisioning_uri(secret)

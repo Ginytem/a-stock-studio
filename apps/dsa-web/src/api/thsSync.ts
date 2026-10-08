@@ -150,6 +150,20 @@ export type AiExportTokenResult = {
   note: string;
 };
 
+export type AiExportPermanentResult = {
+  url: string;
+  secret: string;
+  otpauthUri: string;
+  scope: string;
+  note: string;
+  tips: string;
+};
+
+export type AiExportTotpCurrentResult = {
+  code: string;
+  ttlSeconds: number;
+};
+
 export type ThsReconcileResult = {
   available: boolean;
   reason?: string;
@@ -242,6 +256,14 @@ export const thsApi = {
     apiClient
       .post<AiExportTokenResult>(`/api/v1/ths/ai-export/token?ttl_hours=${ttlHours}`, null, { timeout: 60000 })
       .then((r) => toCamelCase<AiExportTokenResult>(r.data)),
+  createAiExportPermanentToken: () =>
+    apiClient
+      .post<AiExportPermanentResult>('/api/v1/ths/ai-export/token/permanent', null, { timeout: 60000 })
+      .then((r) => toCamelCase<AiExportPermanentResult>(r.data)),
+  getAiExportTotpCurrent: () =>
+    apiClient
+      .get<AiExportTotpCurrentResult>('/api/v1/ths/ai-export/totp/current', { timeout: 30000 })
+      .then((r) => toCamelCase<AiExportTotpCurrentResult>(r.data)),
   getAiExport: (days = 90, curveDays = 180, scope: 'core' | 'compact' | 'full' = 'full') =>
     apiClient
       .get<unknown>(`/api/v1/ths/ai-export?format=json&days=${days}&curve_days=${curveDays}&scope=${scope}`, {

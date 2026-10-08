@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { thsApi, thsExportApi } from '../api/thsSync';
 import type {
+  AiExportPermanentResult,
   AiExportTokenResult,
   ThsStatus,
   ThsSyncResult,
@@ -56,6 +57,77 @@ export const ThsSyncPage: React.FC = () => {
   const [jsonCopied, setJsonCopied] = useState(false);
   const [jsonInfo, setJsonInfo] = useState<string | null>(null);
   const [aiScope, setAiScope] = useState<'core' | 'compact' | 'full'>('core');
+
+  // ---------- AI 数据分享固定接口（TOTP） ----------
+  const [aiPerm, setAiPerm] = useState<AiExportPermanentResult | null>(null);
+  const [aiPermLoading, setAiPermLoading] = useState(false);
+  const [aiPermCopied, setAiPermCopied] = useState(false);
+  const [aiSecretCopied, setAiSecretCopied] = useState(false);
+  const [totpCode, setTotpCode] = useState('');
+  const [totpLoading, setTotpLoading] = useState(false);
+  const [totpCopied, setTotpCopied] = useState(false);
+
+  const generateAiPermToken = useCallback(async () => {
+    setAiPermLoading(true);
+    setError(null);
+    try {
+      const p = await thsApi.createAiExportPermanentToken();
+      setAiPerm(p);
+      setAiPermCopied(false);
+      setAiSecretCopied(false);
+      setTotpCode('');
+    } catch (err) {
+      setError({ title: '生成固定接口失败', message: String(err), rawMessage: String(err), category: 'unknown' });
+    } finally {
+      setAiPermLoading(false);
+    }
+  }, []);
+
+  const copyAiPermUrl = useCallback(async () => {
+    if (!aiPerm) return;
+    try {
+      await navigator.clipboard.writeText(aiPerm.url);
+      setAiPermCopied(true);
+      window.setTimeout(() => setAiPermCopied(false), 2000);
+    } catch {
+      /* 剪贴板不可用时忽略 */
+    }
+  }, [aiPerm]);
+
+  const copyAiSecret = useCallback(async () => {
+    if (!aiPerm) return;
+    try {
+      await navigator.clipboard.writeText(aiPerm.secret);
+      setAiSecretCopied(true);
+      window.setTimeout(() => setAiSecretCopied(false), 2000);
+    } catch {
+      /* 剪贴板不可用时忽略 */
+    }
+  }, [aiPerm]);
+
+  const fetchTotpCode = useCallback(async () => {
+    setTotpLoading(true);
+    setError(null);
+    try {
+      const r = await thsApi.getAiExportTotpCurrent();
+      setTotpCode(r.code);
+    } catch (err) {
+      setError({ title: '获取验证码失败', message: String(err), rawMessage: String(err), category: 'unknown' });
+    } finally {
+      setTotpLoading(false);
+    }
+  }, []);
+
+  const copyTotpCode = useCallback(async () => {
+    if (!totpCode) return;
+    try {
+      await navigator.clipboard.writeText(totpCode);
+      setTotpCopied(true);
+      window.setTimeout(() => setTotpCopied(false), 2000);
+    } catch {
+      /* 剪贴板不可用时忽略 */
+    }
+  }, [totpCode]);
 
   const SCOPE_LABEL: Record<string, string> = {
     core: '核心（总览+持仓，约 2K 字符）',
@@ -780,6 +852,108 @@ export const ThsSyncPage: React.FC = () => {
                     </p>
                   </div>
                 )}
+
+                <div className="mt-4 border-t border-border pt-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-medium">固定接口（长期有效，实时最新数据）</h4>
+                      <p className="mt-0.5 text-xs text-muted-text">
+                        生成一次永久可用，AI 每次访问都拿最新数据；带密钥保护，链接泄露也看不到数据
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary text-sm"
+                      disabled={aiPermLoading}
+                      onClick={() => void generateAiPermToken()}
+                    >
+                      {aiPermLoading ? (
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Link2 className="mr-1.5 h-4 w-4" />
+                      )}
+                      {aiPermLoading ? '生成中…' : aiPerm ? '重新生成（作废旧密钥）' : '生成固定接口'}
+                    </button>
+                  </div>
+                  {aiPerm && (
+                    <div className="mt-3 space-y-2 rounded-xl border border-border bg-muted/30 p-3">
+                      <div className="flex items-start gap-2">
+                        <span className="mt-2 shrink-0 text-xs text-muted-text">接口</span>
+                        <input
+                          type="text"
+                          readOnly
+                          value={aiPerm.url}
+                          className="min-w-0 flex-1 rounded-lg border border-border bg-transparent px-3 py-2 text-xs text-secondary-text"
+                          onFocus={(e) => e.currentTarget.select()}
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary shrink-0 text-sm"
+                          onClick={() => void copyAiPermUrl()}
+                        >
+                          {aiPermCopied ? <Check className="mr-1 h-4 w-4 text-emerald-500" /> : <Copy className="mr-1 h-4 w-4" />}
+                          {aiPermCopied ? '已复制' : '复制'}
+                        </button>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="mt-2 shrink-0 text-xs text-muted-text">密钥</span>
+                        <input
+                          type="text"
+                          readOnly
+                          value={aiPerm.secret}
+                          className="min-w-0 flex-1 rounded-lg border border-amber-500/40 bg-transparent px-3 py-2 text-xs text-secondary-text"
+                          onFocus={(e) => e.currentTarget.select()}
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary shrink-0 text-sm"
+                          onClick={() => void copyAiSecret()}
+                        >
+                          {aiSecretCopied ? <Check className="mr-1 h-4 w-4 text-emerald-500" /> : <Copy className="mr-1 h-4 w-4" />}
+                          {aiSecretCopied ? '已复制' : '复制'}
+                        </button>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="mt-2 shrink-0 text-xs text-muted-text">验证码</span>
+                        <input
+                          type="text"
+                          readOnly
+                          value={totpCode || '（点击右侧按钮获取当前 6 位验证码）'}
+                          className="min-w-0 flex-1 rounded-lg border border-border bg-transparent px-3 py-2 text-xs text-secondary-text"
+                          onFocus={(e) => e.currentTarget.select()}
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary shrink-0 text-sm"
+                          disabled={totpLoading}
+                          onClick={() => void fetchTotpCode()}
+                        >
+                          {totpLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />}
+                          {totpLoading ? '获取中…' : '获取验证码'}
+                        </button>
+                        {totpCode && (
+                          <button
+                            type="button"
+                            className="btn-secondary shrink-0 text-sm"
+                            onClick={() => void copyTotpCode()}
+                          >
+                            {totpCopied ? <Check className="mr-1 h-4 w-4 text-emerald-500" /> : <Copy className="mr-1 h-4 w-4" />}
+                            {totpCopied ? '已复制' : '复制'}
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        ⚠ {aiPerm.note}
+                      </p>
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400">{aiPerm.tips}</p>
+                      {aiPerm.otpauthUri && (
+                        <p className="break-all text-xs text-muted-text">
+                          导入 Authenticator：{aiPerm.otpauthUri}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </Card>
 
               {/* 账目对账状态：网页账本 vs 本地账户 */}

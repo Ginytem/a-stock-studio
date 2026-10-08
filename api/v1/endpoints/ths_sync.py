@@ -388,6 +388,80 @@ def create_ai_export_token(
     }
 
 
+@router.post("/ai-export/token/permanent")
+def create_ai_export_permanent_token(
+    host: Optional[str] = Header(None, alias="Host"),
+):
+    """生成固定接口 TOTP 密钥（需登录）。
+
+    - 返回 Base32 密钥（仅显示一次）与 otpauth:// URI：可导入 Google/
+      Microsoft Authenticator，或由支持 TOTP 的 AI 自行计算验证码；
+    - 访问固定接口需携带当前 6 位验证码 ?code=XXXXXX（30 秒轮换）；
+    - 密钥加密持久化保存（DPAPI + Fernet），服务重启不失效；
+    - 重新调用本接口即作废旧密钥（旧验证码立即失效）。
+    """
+    from src.services.ths_sync.ai_export_token import (
+        create_permanent_token,
+        permanent_provisioning_uri,
+    )
+
+    secret = create_permanent_token()
+    host = (host or "127.0.0.1:8000").strip()
+    scheme = "http"
+    if host and not host.startswith("127.0.0.1") and not host.startswith("localhost") and not host.startswith("192.168.") and not host.startswith("10.") and not host.startswith("172."):
+        scheme = "https"
+    url = "%s://%s/api/v1/ths/ai-export/static" % (scheme, host)
+    return {
+        "url": url,
+        "secret": secret,
+        "otpauth_uri": permanent_provisioning_uri(secret),
+        "scope": "full",
+        "note": "Base32 密钥仅显示一次，请妥善保存（可导入 Google/Microsoft Authenticator 生成 6 位验证码）；固定接口不包含密钥，访问时拼接 ?code=当前验证码&format=text；重新生成会作废旧密钥。",
+        "tips": "完整示例：%s?code=123456&format=text&days=90&curve_days=180" % url,
+    }
+
+
+@router.get("/ai-export/totp/current")
+def ai_export_totp_current():
+    """获取当前 30 秒窗口的 6 位验证码（需登录，服务端代算，供页面直接复制）。"""
+    from src.services.ths_sync.ai_export_token import permanent_current_code, permanent_info
+
+    if permanent_info() is None:
+        raise HTTPException(status_code=404, detail={"error": "no_secret", "message": "尚未生成固定接口密钥"})
+    return {"code": permanent_current_code(), "ttl_seconds": 30}
+
+
+@router.get("/ai-export/static")
+def ai_export_static(
+    code: str = Query(..., description="TOTP 验证码（6 位，由固定密钥生成，30 秒轮换）"),
+    days: int = Query(90, description="交易流水回溯天数"),
+    curve_days: int = Query(180, description="资产曲线天数"),
+    scope: str = Query("full", pattern="^(core|compact|full)$", description="数据范围：core(仅总览+持仓+统计) / compact(+现金+最近20笔+曲线摘要) / full(完整)"),
+    format: str = Query("json", description="json | text（text 返回 Markdown）"),
+):
+    """免登录固定接口：凭当前 TOTP 验证码实时读取 AI 导出数据（每次访问实时生成最新数据）。
+
+    验证码无效 / 过期 / 密钥已作废一律 403；密钥由管理员持有，只应提供给指定的 AI。
+    """
+    from src.services.ths_sync.ai_export_token import verify_permanent_token
+
+    if not verify_permanent_token(code):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "invalid_code", "message": "验证码无效或已过期，请使用当前 6 位验证码"},
+        )
+    try:
+        data = _service().build_ai_export(days=days, curve_days=curve_days, scope=scope)
+    except Exception as exc:  # noqa: BLE001
+        raise _internal_error("AI 数据导出失败", exc)
+    if format == "text":
+        return PlainTextResponse(
+            _render_ai_export_text(data, days, curve_days),
+            media_type="text/plain; charset=utf-8",
+        )
+    return data
+
+
 @router.get("/ai-export/shared")
 def ai_export_shared(
     token: str = Query(..., description="一次性令牌（由 /ai-export/token 生成）"),

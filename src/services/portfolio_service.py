@@ -1801,7 +1801,11 @@ class PortfolioService:
             keys = list(avg_state.keys())
 
         active_symbols: List[str] = []
-        if include_realtime and as_of_date == date.today():
+        # 盘中与盘后（as_of=今天）都收集有效持仓并拉腾讯实时行情：
+        # - 盘中：实时价；
+        # - 盘后：腾讯接口返回当日收盘价，用作本地市值口径（与同花顺网页实时市值一致，
+        #   避免账本接口价与行情收盘价不一致导致的市值差额）。
+        if as_of_date == date.today():
             for key in sorted(keys):
                 symbol, _, _ = key
                 if cost_method == "fifo":
@@ -1857,23 +1861,37 @@ class PortfolioService:
                 include_realtime=include_realtime,
             )
             last_price = price_info.price
-            # 盘后不拉实时时，用同花顺账本最新价（今日收盘价）覆盖本地价格，
-            # 保证市值/总资产反映当日收盘，且与账本网页一致。
-            if (
-                not include_realtime
-                and ths_price_map is not None
-                and symbol in ths_price_map
-                and float(ths_price_map[symbol]) > 0
-            ):
-                last_price = float(ths_price_map[symbol])
-                price_info = _ResolvedPositionPrice(
-                    price=last_price,
-                    source="ths_ledger",
-                    price_date=date.today(),
-                    is_stale=False,
-                    is_available=True,
-                    provider="ths_ledger",
-                )
+            # 盘后（不拉实时）时，用腾讯实时/收盘价作为当日价格覆盖本地价格，
+            # 保证市值/总资产与同花顺网页实时市值一致（盘后腾讯接口返回当日收盘价）；
+            # 腾讯缺失时回退账本接口价，再回退行情库收盘价。
+            if not include_realtime and as_of_date == date.today():
+                tencent_price = None
+                if realtime_prices is not None:
+                    tencent_price, _ = realtime_prices.get(symbol, (None, None))
+                if tencent_price is not None and float(tencent_price) > 0:
+                    last_price = float(tencent_price)
+                    price_info = _ResolvedPositionPrice(
+                        price=last_price,
+                        source="realtime_quote",
+                        price_date=date.today(),
+                        is_stale=False,
+                        is_available=True,
+                        provider="tencent",
+                    )
+                elif (
+                    ths_price_map is not None
+                    and symbol in ths_price_map
+                    and float(ths_price_map[symbol]) > 0
+                ):
+                    last_price = float(ths_price_map[symbol])
+                    price_info = _ResolvedPositionPrice(
+                        price=last_price,
+                        source="ths_ledger",
+                        price_date=date.today(),
+                        is_stale=False,
+                        is_available=True,
+                        provider="ths_ledger",
+                    )
             limitations = _portfolio_limitations_for_market(market)
 
             if price_info.is_available:

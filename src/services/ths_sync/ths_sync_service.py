@@ -1106,19 +1106,34 @@ class ThsSyncService:
         web = self.fetch_merged()
         web_cash = float(web.get("total_cash") or 0)
         web_positions = web.get("positions", [])
+        # 用腾讯实时/收盘价重算网页市值（与本地持仓页同口径），
+        # 避免账本接口价与行情收盘价不一致造成虚假市值差额。
+        web_symbols = [str(p.get("code") or "").strip() for p in web_positions if p.get("code")]
+        web_realtime = None
+        if web_symbols:
+            try:
+                web_realtime = self.portfolio_service._prefetch_realtime_position_prices(web_symbols)
+            except Exception:  # noqa: BLE001 - 行情重算失败则回退账本接口价
+                web_realtime = None
         web_by_code: Dict[str, Dict[str, Any]] = {}
         web_total_value = 0.0
         for p in web_positions:
             code = str(p.get("code") or "").strip()
             if not code:
                 continue
+            qty = float(p.get("quantity") or 0)
+            value = float(p.get("value") or 0)
+            if web_realtime is not None:
+                px, _ = web_realtime.get(code, (None, None))
+                if px is not None and float(px) > 0:
+                    value = float(px) * qty
             web_by_code[code] = {
                 "name": str(p.get("name") or ""),
-                "quantity": float(p.get("quantity") or 0),
+                "quantity": qty,
                 "cost": float(p.get("cost") or 0),
-                "value": float(p.get("value") or 0),
+                "value": value,
             }
-            web_total_value += float(p.get("value") or 0)
+            web_total_value += value
 
         # ---- 本地端：持仓（数量/成本/市值） ----
         account = self._find_or_create_account(account_name)

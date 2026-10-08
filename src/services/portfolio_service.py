@@ -1569,10 +1569,12 @@ class PortfolioService:
             cash = float(r.total_cash or 0)
             cf = 0.0
             equity_only = False
+            has_cf = False
             try:
                 payload = json.loads(r.payload) if r.payload else {}
                 cf = float(payload.get("net_cashflow") or 0.0)
                 equity_only = bool(payload.get("equity_only"))
+                has_cf = "net_cashflow" in payload
             except Exception:
                 payload = {}
             if peak is None or eq > peak:
@@ -1583,8 +1585,9 @@ class PortfolioService:
             if first_eq is None:
                 first_eq = eq
             last_eq = eq
-            # 时间加权：当日收益率 = (当日收盘权益 - 上日收盘权益 - 当日净入金) / 上日收盘权益
-            if prev_eq is not None and prev_eq != 0:
+            # 时间加权：当日收益率 = (当日收盘权益 - 上日收盘权益 - 当日净入金) / 上日收盘权益。
+            # equity_only 快照无净出入金记录时跳过累加（出入金未知，强行按 0 会把入金算成收益）。
+            if prev_eq is not None and prev_eq != 0 and not (equity_only and not has_cf):
                 period_ret = (eq - prev_eq - cf) / prev_eq
                 cum_ret *= (1 + period_ret)
             prev_eq = eq
@@ -1616,6 +1619,7 @@ class PortfolioService:
                 "return_pct": ret_pct,
                 "simple_return_pct": simple_ret_pct,  # 起止点简单环比（未剔出入金）
                 "method": "TWR（时间加权，剔除期间净出入金）" if ret_pct is not None else None,
+                "note": "equity_only 快照日（无持仓/现金拆分且缺净出入金）不参与 TWR 累加，避免把出入金算成收益；begin/end 为曲线全序列首尾点",
                 "max_drawdown_pct": round(max_dd, 2) if series else None,
                 "points": len(series),
                 # camelCase 兼容（前端契约）

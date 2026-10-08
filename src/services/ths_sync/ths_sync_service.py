@@ -17,10 +17,10 @@ import os
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from src.repositories.portfolio_repo import PortfolioRepository
-from src.services.portfolio_service import PortfolioService
+from src.services.portfolio_service import PortfolioService, _round_to_price_precision
 from src.services.ths_sync.ths_client import ThsSession, ThsLoginError
 from src.storage import PortfolioDailySnapshot
 
@@ -1210,6 +1210,22 @@ class ThsSyncService:
         避免资产曲线点覆盖正常快照的现金/市值（曾导致现金被清零、市值被写成权益点）。
         """
         written = 0
+        # 按日净现金流：银行转证券/银行转存=入金(+)，证券转银行/银行转取=出金(-)，
+        # 用于 TWR 在资产曲线日（无持仓拆分）剔除出入金，避免把入金算成收益。
+        daily_cf: Dict[str, float] = {}
+        try:
+            with self.repo.db.get_session() as session:
+                for row in session.execute(
+                    text(
+                        "select trade_date, sum(amount) as amt from portfolio_import_records "
+                        "where record_type like :a or record_type like :b or record_type like :c or record_type like :d "
+                        "group by trade_date"
+                    ),
+                    {"a": "%银行转证券%", "b": "%证券转银行%", "c": "%银行转存%", "d": "%银行转取%"},
+                ):
+                    daily_cf[str(row.trade_date)] = float(row.amt or 0.0)
+        except Exception:
+            daily_cf = {}
         for p in points:
             d = str(p.get("date") or "")
             if not d:
@@ -1247,7 +1263,10 @@ class ThsSyncService:
                     fee_total=0.0,
                     tax_total=0.0,
                     fx_stale=False,
-                    payload=json.dumps({"source": "ths_ledger", "equity_only": True}, ensure_ascii=False),
+                    payload=json.dumps(
+                        {"source": "ths_ledger", "equity_only": True, "net_cashflow": daily_cf.get(d, 0.0)},
+                        ensure_ascii=False,
+                    ),
                     positions=[],
                     lots=[],
                     valuation_currency="CNY",
@@ -1815,10 +1834,14 @@ class ThsSyncService:
                 "include": ["overview", "positions", "recent_trades", "equity_curve", "statement"],
                 "notes": (
                     "数据来源：同花顺账本仅提供【持仓数据】【交易记录】两张原始表，其余均为推算。"
-                    "overview.realized_pnl 依赖手动录入交易流水（当前为空→0），已实现盈亏请使用 closed_positions（已清仓，券商原始数据）"
-                    "与 positions.cum_buy/cum_sell/cum_dividend/net_sunk_cost（导入流水聚合）。"
-                    "fee_total/tax_total 为导入流水费用列与股息个税合计。"
-                    "月度/年度收益率为 Modified Dietz（剔除出入金）+ 月度复合口径。"
+                    "overview.realized_pnl = 已清仓合计（closed_positions，券商原始，Σ=136,571.88/182笔）；"
+                    "持仓内历史波段已实现见 positions.cum_buy/cum_sell/cum_dividend/net_sunk_cost。"
+                    "fee_total/tax_total = 导入流水费用列与股息个税合计（4,751.27/1,424.41）。"
+                    "月度/年度收益率 = Modified Dietz（剔除出入金）+ 月度复合；equity_curve.return_pct 为 TWR（剔出入金），"
+                    "simple_return_pct 为起止点简单环比（含出入金），两者口径不同。"
+                    "total_cash 为接口 money_remain 加总（40,137.59），券商 App 可用资金 40,136.27，"
+                    "差 1.32 = 接口资金余额含逆回购应计利息（9-29 有 4 万 GC001），属上游口径差，非本地计算误差。"
+                    "equity_only 快照日（无持仓/现金拆分）total_market_value/total_cash 输出 null。"
                 ),
             }
         }
@@ -1852,16 +1875,15 @@ class ThsSyncService:
                     mv = float(p.get("market_value_base") or 0)
                     chg = p.get("day_change_pct")
                     day_pnl = None
-                    # 与 overview.day_pnl 同口径：数量 × (现价 − 昨收)，昨收 = 现价/(1+涨跌幅) 按现价小数位舍入
+                    # 与 overview.day_pnl 同口径：数量 × (现价 − 昨收)，
+                    # 昨收 = 现价/(1+涨跌幅) 按现价小数位舍入（_round_to_price_precision，与快照聚合一致）
                     if chg is not None and mv:
                         try:
                             chg_f = float(chg)
                             px = float(p.get("last_price") or 0)
                             qty = float(p.get("quantity") or 0)
                             if px > 0 and qty > 0 and abs(chg_f) > 1e-9:
-                                s = str(px)
-                                decimals = len(s.split(".")[1]) if "." in s else 2
-                                prev = round(px / (1.0 + chg_f / 100.0), decimals)
+                                prev = _round_to_price_precision(px / (1.0 + chg_f / 100.0), px)
                                 day_pnl = round(qty * (px - prev), 2)
                         except (TypeError, ValueError):
                             day_pnl = None
@@ -1882,6 +1904,23 @@ class ThsSyncService:
                         }
                     )
             export["positions"] = positions
+            # overview.day_pnl/day_pnl_pct 改为从当前 positions 实时加总（响应内自洽）。
+            # 快照聚合值可能来自早前保存的快照（盘中价变化会导致与 positions 不同步）。
+            _d_sum = round(sum(float(p.get("day_pnl") or 0) for p in positions), 2)
+            if _d_sum or positions:
+                export["overview"]["day_pnl"] = _d_sum
+                # 分母：昨收市值 = Σ(昨收价 × 数量)
+                _prev_mv = 0.0
+                for p in positions:
+                    _px = float(p.get("price") or 0)
+                    _qty = float(p.get("quantity") or 0)
+                    _chg = float(p.get("day_change_pct") or 0)
+                    if _px > 0 and _qty > 0 and abs(_chg) > 1e-9:
+                        _prev = _round_to_price_precision(_px / (1.0 + _chg / 100.0), _px)
+                        _prev_mv += _prev * _qty
+                    else:
+                        _prev_mv += _px * _qty
+                export["overview"]["day_pnl_pct"] = round(_d_sum / _prev_mv * 100.0, 6) if _prev_mv > 0 else None
             # 逐标的资金穿透（full 档）：累计买入/卖出/分红 → 真实净沉没本金、回本涨幅、持仓天数
             per_symbol: Dict[str, Dict[str, Any]] = {}
             fee_total_import = 0.0

@@ -1813,6 +1813,13 @@ class ThsSyncService:
                 "scope": scope,
                 "trade_scope": "full_history" if scope == "full" else f"last_{days}_days",
                 "include": ["overview", "positions", "recent_trades", "equity_curve", "statement"],
+                "notes": (
+                    "数据来源：同花顺账本仅提供【持仓数据】【交易记录】两张原始表，其余均为推算。"
+                    "overview.realized_pnl 依赖手动录入交易流水（当前为空→0），已实现盈亏请使用 closed_positions（已清仓，券商原始数据）"
+                    "与 positions.cum_buy/cum_sell/cum_dividend/net_sunk_cost（导入流水聚合）。"
+                    "fee_total/tax_total 为导入流水费用列与股息个税合计。"
+                    "月度/年度收益率为 Modified Dietz（剔除出入金）+ 月度复合口径。"
+                ),
             }
         }
 
@@ -1871,6 +1878,8 @@ class ThsSyncService:
             export["positions"] = positions
             # 逐标的资金穿透（full 档）：累计买入/卖出/分红 → 真实净沉没本金、回本涨幅、持仓天数
             per_symbol: Dict[str, Dict[str, Any]] = {}
+            fee_total_import = 0.0
+            tax_total_import = 0.0
             if scope == "full":
                 try:
                     acc_id2 = self._find_or_create_account(DEFAULT_ACCOUNT_NAME)["id"]
@@ -1880,11 +1889,16 @@ class ThsSyncService:
                     ).get("records", [])
                     for r in recs_all:
                         code = str(r.get("code") or "").strip()
-                        if not code:
-                            continue
                         t = str(r.get("record_type") or "").strip()
                         amt = abs(float(r.get("amount") or 0))
                         d = str(r.get("trade_date") or "")
+                        # 累计费用/税费：买入卖出费用列合计 + 股息个税
+                        if t in ("买入", "卖出"):
+                            fee_total_import += abs(float(r.get("fee") or 0))
+                        elif t == "股息个税征收":
+                            tax_total_import += amt
+                        if not code:
+                            continue
                         agg = per_symbol.setdefault(code, {"buy": 0.0, "sell": 0.0, "div": 0.0, "first": None})
                         # 买入类：买入/新股入帐/股份转入/转债转入（导出金额为负=资金流出）；
                         # 卖出类：卖出；分红类：除权除息（与账本「累计分红」口径一致，不扣股息个税）
@@ -1896,6 +1910,8 @@ class ThsSyncService:
                             agg["div"] += amt
                         if d and (agg["first"] is None or d < agg["first"]):
                             agg["first"] = d
+                    export["overview"]["fee_total"] = round(fee_total_import, 2)
+                    export["overview"]["tax_total"] = round(tax_total_import, 2)
                 except Exception:  # noqa: BLE001
                     per_symbol = {}
             for p in positions:

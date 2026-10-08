@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
-from sqlalchemy import select
+from sqlalchemy import select, text
 from src.config import get_config
 from src.repositories.portfolio_repo import (
     DuplicateTradeDedupHashError,
@@ -1563,20 +1563,36 @@ class PortfolioService:
         # 时间加权收益率（剔除外部入金/出金）
         cum_ret = 1.0
         prev_eq: Optional[float] = None
+        # 按日净现金流兜底：从导入流水银证转账聚合（银行转证券/银行转存=入金+，证券转银行/银行转取=出金−）。
+        # 不依赖快照 payload（同步器可能未写入），保证 TWR 永远剔除出入金。
+        daily_cf_map: Dict[str, float] = {}
+        try:
+            with self.repo.db.get_session() as session:
+                for row in session.execute(
+                    text(
+                        "select trade_date, sum(amount) as amt from portfolio_import_records "
+                        "where record_type like :a or record_type like :b or record_type like :c or record_type like :d "
+                        "group by trade_date"
+                    ),
+                    {"a": "%银行转证券%", "b": "%证券转银行%", "c": "%银行转存%", "d": "%银行转取%"},
+                ):
+                    daily_cf_map[str(row.trade_date)] = float(row.amt or 0.0)
+        except Exception:
+            daily_cf_map = {}
         for r in rows:
             eq = float(r.total_equity or 0)
             mv = float(r.total_market_value or 0)
             cash = float(r.total_cash or 0)
-            cf = 0.0
             equity_only = False
-            has_cf = False
             try:
                 payload = json.loads(r.payload) if r.payload else {}
-                cf = float(payload.get("net_cashflow") or 0.0)
                 equity_only = bool(payload.get("equity_only"))
-                has_cf = "net_cashflow" in payload
             except Exception:
                 payload = {}
+            # 净现金流一律以「导入流水银证转账按日聚合」为准（权威数据源，覆盖全部出入金日；
+            # 未命中=当日无出入金，cf=0 正确）。不读快照 payload（同步器可能写入错误的 0）。
+            _d = r.snapshot_date.isoformat()
+            cf = daily_cf_map.get(_d, 0.0)
             if peak is None or eq > peak:
                 peak = eq
             dd = (eq - peak) / peak * 100 if peak else 0.0
@@ -1586,8 +1602,8 @@ class PortfolioService:
                 first_eq = eq
             last_eq = eq
             # 时间加权：当日收益率 = (当日收盘权益 - 上日收盘权益 - 当日净入金) / 上日收盘权益。
-            # equity_only 快照无净出入金记录时跳过累加（出入金未知，强行按 0 会把入金算成收益）。
-            if prev_eq is not None and prev_eq != 0 and not (equity_only and not has_cf):
+            # cf 恒可确定（导入流水全量覆盖；未命中=无出入金=0），全部快照日参与。
+            if prev_eq is not None and prev_eq != 0:
                 period_ret = (eq - prev_eq - cf) / prev_eq
                 cum_ret *= (1 + period_ret)
             prev_eq = eq

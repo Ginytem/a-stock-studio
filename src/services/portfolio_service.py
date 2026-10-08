@@ -1567,6 +1567,14 @@ class PortfolioService:
             eq = float(r.total_equity or 0)
             mv = float(r.total_market_value or 0)
             cash = float(r.total_cash or 0)
+            cf = 0.0
+            equity_only = False
+            try:
+                payload = json.loads(r.payload) if r.payload else {}
+                cf = float(payload.get("net_cashflow") or 0.0)
+                equity_only = bool(payload.get("equity_only"))
+            except Exception:
+                payload = {}
             if peak is None or eq > peak:
                 peak = eq
             dd = (eq - peak) / peak * 100 if peak else 0.0
@@ -1577,42 +1585,45 @@ class PortfolioService:
             last_eq = eq
             # 时间加权：当日收益率 = (当日收盘权益 - 上日收盘权益 - 当日净入金) / 上日收盘权益
             if prev_eq is not None and prev_eq != 0:
-                cf = 0.0
-                try:
-                    payload = json.loads(r.payload) if r.payload else {}
-                    cf = float(payload.get("net_cashflow") or 0.0)
-                except Exception:
-                    cf = 0.0
                 period_ret = (eq - prev_eq - cf) / prev_eq
                 cum_ret *= (1 + period_ret)
             prev_eq = eq
+            # equity_only 快照（仅资产曲线，无持仓/现金拆分）：市值/现金置空，避免与正常快照混淆
+            mv_out = None if equity_only else round(mv, 2)
+            cash_out = None if equity_only else round(cash, 2)
             series.append({
                 "date": r.snapshot_date.isoformat(),
                 "total_equity": round(eq, 2),
-                "total_market_value": round(mv, 2),
-                "total_cash": round(cash, 2),
+                "total_market_value": mv_out,
+                "total_cash": cash_out,
                 "drawdown_pct": round(dd, 2),
                 # camelCase 兼容（前端契约）
                 "totalEquity": round(eq, 2),
-                "totalMarketValue": round(mv, 2),
-                "totalCash": round(cash, 2),
+                "totalMarketValue": mv_out,
+                "totalCash": cash_out,
                 "drawdownPct": round(dd, 2),
             })
         ret_pct = None
+        simple_ret_pct = None
         if first_eq and first_eq != 0 and last_eq is not None:
             ret_pct = round((cum_ret - 1) * 100, 2)
+            simple_ret_pct = round((last_eq - first_eq) / first_eq * 100, 2)
         return {
             "series": series,
             "summary": {
                 "begin_equity": round(first_eq, 2) if first_eq is not None else None,
                 "end_equity": round(last_eq, 2) if last_eq is not None else None,
                 "return_pct": ret_pct,
+                "simple_return_pct": simple_ret_pct,  # 起止点简单环比（未剔出入金）
+                "method": "TWR（时间加权，剔除期间净出入金）" if ret_pct is not None else None,
                 "max_drawdown_pct": round(max_dd, 2) if series else None,
                 "points": len(series),
                 # camelCase 兼容（前端契约）
                 "beginEquity": round(first_eq, 2) if first_eq is not None else None,
                 "endEquity": round(last_eq, 2) if last_eq is not None else None,
                 "returnPct": ret_pct,
+                "simpleReturnPct": simple_ret_pct,
+                "method": "TWR（时间加权，剔除期间净出入金）" if ret_pct is not None else None,
                 "maxDrawdownPct": round(max_dd, 2) if series else None,
                 "points": len(series),
             },

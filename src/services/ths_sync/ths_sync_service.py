@@ -1852,11 +1852,17 @@ class ThsSyncService:
                     mv = float(p.get("market_value_base") or 0)
                     chg = p.get("day_change_pct")
                     day_pnl = None
-                    if chg is not None:
+                    # 与 overview.day_pnl 同口径：数量 × (现价 − 昨收)，昨收 = 现价/(1+涨跌幅) 按现价小数位舍入
+                    if chg is not None and mv:
                         try:
                             chg_f = float(chg)
-                            if abs(chg_f) > 1e-9:
-                                day_pnl = round(mv - mv / (1.0 + chg_f / 100.0), 2)
+                            px = float(p.get("last_price") or 0)
+                            qty = float(p.get("quantity") or 0)
+                            if px > 0 and qty > 0 and abs(chg_f) > 1e-9:
+                                s = str(px)
+                                decimals = len(s.split(".")[1]) if "." in s else 2
+                                prev = round(px / (1.0 + chg_f / 100.0), decimals)
+                                day_pnl = round(qty * (px - prev), 2)
                         except (TypeError, ValueError):
                             day_pnl = None
                     positions.append(
@@ -2033,10 +2039,19 @@ class ThsSyncService:
         if scope == "full":
             try:
                 account_id = self._find_or_create_account(DEFAULT_ACCOUNT_NAME)["id"]
+                cp_stats = self.repo.closed_position_stats(account_id)
                 export["closed_positions"] = {
-                    "stats": self.repo.closed_position_stats(account_id),
+                    "stats": cp_stats,
                     "items": self.repo.list_closed_positions(account_id),
                 }
+                # overview.realized_pnl 口径修正：全账户已实现盈亏以「已清仓合计」为锚（券商原始数据）。
+                # 依赖手动录入流水的重放值（恒为 0）不再使用；当前持仓的历史波段已实现见 positions.cum_*。
+                if cp_stats:
+                    cp_total = float(cp_stats.get("total_pnl") or cp_stats.get("total_pnl_sum") or 0)
+                    if not cp_total:
+                        items = export["closed_positions"].get("items") or []
+                        cp_total = round(sum(float(i.get("total_pnl") or 0) for i in items), 2)
+                    export["overview"]["realized_pnl"] = cp_total
             except Exception as exc:  # noqa: BLE001
                 export["closed_positions_error"] = str(exc)[:200]
 
@@ -2084,6 +2099,8 @@ class ThsSyncService:
                 "begin_equity": aa.get("begin_equity"),
                 "end_equity": aa.get("end_equity"),
                 "return_pct": aa.get("return_pct"),
+                "formula": "年收益率 = Π(1 + 各月收益率) − 1；月收益率 = Modified Dietz（剔除期间出入金）。"
+                           "注意：不是权益链式重放，故 (end−begin−净出入金)/begin ≠ 年收益率。",
                 "months": annual.get("months"),
             }
             # 回填 overview 收益率（AI 侧常只读 overview 找收益率）

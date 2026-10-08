@@ -802,7 +802,7 @@ function AnnualView() {
                 {retPct === null || retPct === undefined ? '年收益率 --' : `年收益率 ${fmtSigned(retPct)}%`}
               </span>
             </div>
-            <p className="mt-1 text-xs text-muted-text">口径：已剔除全年出入金（Modified Dietz）</p>
+            <p className="mt-1 text-xs text-muted-text">口径：各月收益率复合（每月已剔除期间出入金）</p>
             <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-lg bg-base/60 p-3">
                 <p className="text-xs text-muted-text">期初总资产（1 月初）</p>

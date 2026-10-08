@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.portfolio_service import PortfolioService
-from src.services.ths_sync.ths_client import ThsSession
+from src.services.ths_sync.ths_client import ThsSession, ThsLoginError
 
 DEFAULT_ACCOUNT_NAME = "百福具臻"
 
@@ -385,8 +385,29 @@ class ThsSyncService:
         未登录时回退本地快照（此时持仓天数为 0，前端显示 --）。
         """
         if self.client.is_logged_in():
-            data = self.fetch_merged()
-            positions = data.get("positions", [])
+            try:
+                data = self.fetch_merged()
+                positions = data.get("positions", [])
+            except ThsLoginError:
+                # 登录态失效（cookie 过期/被踢）：回退本地快照持仓，接口不报错
+                self.client.clear_login()
+                positions = []
+                account = self._find_or_create_account(DEFAULT_ACCOUNT_NAME)
+                snapshot = self.portfolio_service.get_portfolio_snapshot(account_id=account["id"], include_realtime=False)
+                for acc in snapshot.get("accounts", []):
+                    for p in acc.get("positions", []):
+                        positions.append({
+                            "code": str(p.get("symbol") or ""),
+                            "name": str(p.get("name") or ""),
+                            "quantity": float(p.get("quantity") or 0),
+                            "cost": float(p.get("avg_cost") or 0),
+                            "price": float(p.get("last_price") or 0),
+                            "hold_profit": float(p.get("unrealized_pnl_base") or 0),
+                            "hold_rate": float(p.get("unrealized_pnl_pct") or 0),
+                            "hold_days": 0,
+                            "day_pnl": float(p.get("day_pnl") or 0),
+                            "day_pnl_pct": float(p.get("day_pnl_pct") or 0),
+                        })
         else:
             positions = []
             account = self._find_or_create_account(DEFAULT_ACCOUNT_NAME)
@@ -647,6 +668,9 @@ class ThsSyncService:
             lookback_days=62,
         )
         end_snap = snapshots[-1] if snapshots else None
+        # 未来月份/无数据月份：最近快照落在月初之前，说明该月没有快照，视为无期末（避免假 0.0 收益率）
+        if end_snap is not None and end_snap.snapshot_date < date_from:
+            end_snap = None
         begin_snap: Any = None
         for s in snapshots:
             if s.snapshot_date < date_from:
@@ -809,7 +833,16 @@ class ThsSyncService:
                 end_date_iso = last_asset.get("end_date")
             bd = date.fromisoformat(begin_date_iso) if begin_date_iso else None
             ed = date.fromisoformat(end_date_iso) if end_date_iso else None
-            ret_pct = self._dietz_pct(bd, begin_equity, ed, end_equity, cash_flows)
+            # 年度收益率优先「逐月复合」：与页面月度明细、手算口径一致；
+            # 月度数据缺失（如仅部分月份有快照）时回退全年 Modified Dietz
+            monthly_vals = [m.get("return_pct") for m in months if m.get("return_pct") is not None]
+            if monthly_vals:
+                comp = 1.0
+                for v in monthly_vals:
+                    comp *= (1 + v / 100)
+                ret_pct = round((comp - 1) * 100, 2)
+            else:
+                ret_pct = self._dietz_pct(bd, begin_equity, ed, end_equity, cash_flows)
         return {
             "year": str(year),
             "source": "ths",

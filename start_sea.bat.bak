@@ -1,0 +1,8 @@
+@echo off
+title SEA ���ܷ�������
+cd /d "E:\daily_stock_analysis-main"
+curl -s -o nul -m 3 http://127.0.0.1:8000/api/health
+if %errorlevel%==0 exit /b 0
+set LITELLM_LOCAL_MODEL_COST_MAP=True
+set LITELLM_LOG=ERROR
+".venv\Scripts\python.exe" main.py --webui-only

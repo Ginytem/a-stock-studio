@@ -575,6 +575,7 @@ function MonthlyView() {
                 {retPct === null || retPct === undefined ? '月收益率 --' : `月收益率 ${fmtSigned(retPct)}%`}
               </span>
             </div>
+            <p className="mt-1 text-xs text-muted-text">口径：已剔除期间出入金（Modified Dietz）</p>
             <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-lg bg-base/60 p-3">
                 <p className="text-xs text-muted-text">期初总资产</p>
@@ -801,6 +802,7 @@ function AnnualView() {
                 {retPct === null || retPct === undefined ? '年收益率 --' : `年收益率 ${fmtSigned(retPct)}%`}
               </span>
             </div>
+            <p className="mt-1 text-xs text-muted-text">口径：已剔除全年出入金（Modified Dietz）</p>
             <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-lg bg-base/60 p-3">
                 <p className="text-xs text-muted-text">期初总资产（1 月初）</p>

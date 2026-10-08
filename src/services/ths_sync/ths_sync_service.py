@@ -480,6 +480,41 @@ class ThsSyncService:
         return {"total": len(stocks), "stocks": stocks}
 
 
+    def _dietz_pct(
+        self,
+        begin_date: Optional[date],
+        begin_equity: Optional[float],
+        end_date: Optional[date],
+        end_equity: Optional[float],
+        cash_flows: Optional[List[tuple]],
+    ) -> Optional[float]:
+        """Modified Dietz 收益率（剔除出入金）。
+
+        现金流符号：入金为正、出金为负；现金流发生在期初权重 1、期末权重 0。
+        无现金流时退化为 (E-B)/B（与旧口径一致）。
+        """
+        if not begin_equity or begin_equity == 0 or end_equity is None:
+            return None
+        cf_total = 0.0
+        weighted = 0.0
+        if begin_date and end_date and cash_flows:
+            days = (end_date - begin_date).days
+            if days > 0:
+                for cd, ca in cash_flows:
+                    if not cd:
+                        continue
+                    if cd <= begin_date:
+                        w = 1.0
+                    else:
+                        di = (cd - begin_date).days
+                        w = max(0.0, (days - di) / days)
+                    cf_total += ca
+                    weighted += ca * w
+        denom = begin_equity + weighted
+        if denom == 0:
+            return None
+        return round((end_equity - begin_equity - cf_total) / denom * 100, 2)
+
     def build_statement(self, *, month: str, account_id: Optional[int] = None, cost_method: str = "fifo") -> Dict[str, Any]:
         """从账本实时拉取指定月份的全部交易（含国债逆回购等），聚合生成月度对账单。
 
@@ -511,6 +546,7 @@ class ThsSyncService:
         sell_fee = 0.0
         cash_in = 0.0
         cash_out = 0.0
+        cash_flows: List[tuple] = []
         details: List[Dict[str, Any]] = []
         dividends: List[Dict[str, Any]] = []
 
@@ -563,12 +599,17 @@ class ThsSyncService:
                     sell_fee += abs(amt)
                 elif cat in self._EXPORT_CATEGORY_CASH_IN:
                     cash_in += abs(amt)
+                    cash_flows.append((t.trade_date, abs(amt)))
                 elif cat in self._EXPORT_CATEGORY_CASH_OUT:
                     cash_out += abs(amt)
+                    cash_flows.append((t.trade_date, -abs(amt)))
         else:
-            # 回退：实时账本拉取（无导入流水时）
-            res = self.list_merged_trades(start_date=start_date, end_date=end_date)
-            trades = res.get("trades", [])
+            # 回退：实时账本拉取（无导入流水时）；账本未登录/失效时降级为空交易，不阻断快照收益率
+            try:
+                res = self.list_merged_trades(start_date=start_date, end_date=end_date)
+                trades = res.get("trades", [])
+            except Exception:  # noqa: BLE001
+                trades = []
             for t in trades:
                 qty = float(t.get("quantity") or 0)
                 px = float(t.get("price") or 0)
@@ -616,9 +657,14 @@ class ThsSyncService:
 
         begin_equity = _eq(begin_snap)
         end_equity = _eq(end_snap)
-        ret_pct = None
-        if begin_equity and begin_equity != 0 and end_equity is not None:
-            ret_pct = round((end_equity - begin_equity) / begin_equity * 100, 2)
+        # Modified Dietz：剔除期间出入金后的真实收益率（无现金流时与旧口径一致）
+        ret_pct = self._dietz_pct(
+            begin_snap.snapshot_date if begin_snap else None,
+            begin_equity,
+            end_snap.snapshot_date if end_snap else None,
+            end_equity,
+            cash_flows,
+        )
 
         return {
             "month": month,
@@ -641,7 +687,13 @@ class ThsSyncService:
                     reverse=True,
                 ),
             },
-            "asset": {"begin_equity": begin_equity, "end_equity": end_equity, "return_pct": ret_pct},
+            "asset": {
+                "begin_equity": begin_equity,
+                "end_equity": end_equity,
+                "return_pct": ret_pct,
+                "begin_date": begin_snap.snapshot_date.isoformat() if begin_snap else None,
+                "end_date": end_snap.snapshot_date.isoformat() if end_snap else None,
+            },
             "details": sorted(
                 details,
                 key=lambda d: (str(d.get("date") or ""), str(d.get("time") or "")),
@@ -661,11 +713,24 @@ class ThsSyncService:
         sell_fee = 0.0
         cash_in = 0.0
         cash_out = 0.0
+        cash_flows: List[tuple] = []
         details: List[Dict[str, Any]] = []
         dividends: List[Dict[str, Any]] = []
         months: List[Dict[str, Any]] = []
         begin_equity: Optional[float] = None
         end_equity: Optional[float] = None
+        # 全年现金流明细（Modified Dietz 剔除出入金用）
+        imported_year = (
+            self.repo.list_import_records(account_id, date(year, 1, 1), date(year, 12, 31))
+            if account_id
+            else []
+        )
+        for t in imported_year:
+            cat = (t.record_type or "").strip()
+            if cat in self._EXPORT_CATEGORY_CASH_IN:
+                cash_flows.append((t.trade_date, abs(float(t.amount or 0))))
+            elif cat in self._EXPORT_CATEGORY_CASH_OUT:
+                cash_flows.append((t.trade_date, -abs(float(t.amount or 0))))
         for m in range(1, 13):
             month_key = f"{year}-{m:02d}"
             st = self.build_statement(month=month_key, account_id=account_id, cost_method=cost_method)
@@ -694,10 +759,32 @@ class ThsSyncService:
                 "cash_net": round(float(c.get("inflow") or 0) - float(c.get("outflow") or 0), 2),
                 "dividend_count": int(d.get("count") or 0),
                 "return_pct": a.get("return_pct"),
+                "asset": {
+                    "begin_equity": a.get("begin_equity"),
+                    "end_equity": a.get("end_equity"),
+                    "begin_date": a.get("begin_date"),
+                    "end_date": a.get("end_date"),
+                },
             })
         ret_pct = None
+        begin_date_iso = end_date_iso = None
         if begin_equity and begin_equity != 0 and end_equity is not None:
-            ret_pct = round((end_equity - begin_equity) / begin_equity * 100, 2)
+            # 年度快照基准日：1 月报的期初快照日 与 最后有值月报的期末快照日
+            for st in months:
+                bd = st.get("asset", {}).get("begin_date") if isinstance(st.get("asset"), dict) else None
+                if bd:
+                    begin_date_iso = bd
+                    break
+            last_asset = None
+            for st in reversed(months):
+                if st.get("asset", {}).get("end_equity") is not None:
+                    last_asset = st.get("asset", {})
+                    break
+            if last_asset:
+                end_date_iso = last_asset.get("end_date")
+            bd = date.fromisoformat(begin_date_iso) if begin_date_iso else None
+            ed = date.fromisoformat(end_date_iso) if end_date_iso else None
+            ret_pct = self._dietz_pct(bd, begin_equity, ed, end_equity, cash_flows)
         return {
             "year": str(year),
             "source": "ths",

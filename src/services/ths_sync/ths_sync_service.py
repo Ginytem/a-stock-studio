@@ -1913,7 +1913,11 @@ class ThsSyncService:
                     "fee_total/tax_total = 导入流水费用列与股息个税合计（4,751.27/1,424.41）。"
                     "月度/年度收益率 = Modified Dietz（剔除出入金）+ 月度复合；equity_curve.return_pct 为 TWR（剔出入金），"
                     "simple_return_pct 为起止点简单环比（含出入金），两者口径不同。"
-                    "total_cash = 同步时刻账本接口 money_remain 加总（含逆回购应计利息，与券商 App 可用资金差约 1.32 属上游口径差）；"
+                    "total_cash = 同步时刻账本接口 money_remain 加总，口径为「现金余额（含未回款逆回购本金）」："
+                    "做逆回购借出时账本接口现金不减（这笔钱本质仍是现金资产，只是借出占用），"
+                    "故与券商 App「可用资金」（扣逆回购占用）存在差额；"
+                    "如需可用资金 = total_cash − 未回款逆回购本金（当前借出 4 万后，可用约 141 元）。"
+                    "day_pnl = 盘后取账本导出快照当日盈亏（逐票加总），盘中取腾讯实时 (现价−昨收)×数量，两口径一致；"
                     "现金以最近同步快照为准，不做本地重放/校正。"
                     "equity_only 快照日（无持仓/现金拆分）total_market_value/total_cash 输出 null。"
                 ),
@@ -1943,6 +1947,16 @@ class ThsSyncService:
                 "month_return_pct": None,  # 占位：回填最近月份收益率
             }
             positions = []
+            # 导出快照 JSON 的逐票当日盈亏（账本权威值）：盘后腾讯行情无涨跌幅时兜底
+            _json_day_pnl: Dict[str, float] = {}
+            try:
+                _snap_json = self.portfolio_service._read_export_snapshot()
+                for _s in (_snap_json or {}).get("positions", []) or []:
+                    _c = str(_s.get("code") or "").strip()
+                    if _c:
+                        _json_day_pnl[_c] = float(_s.get("day_pnl") or 0)
+            except Exception:  # noqa: BLE001
+                _json_day_pnl = {}
             for acc in accounts:
                 acc_name = acc.get("account_name") or acc.get("name") or ""
                 for p in acc.get("positions", []) or []:
@@ -1961,6 +1975,9 @@ class ThsSyncService:
                                 day_pnl = round(qty * (px - prev), 2)
                         except (TypeError, ValueError):
                             day_pnl = None
+                    # 盘后快照无涨跌幅（腾讯行情缺昨收）时，回退导出快照 JSON 的账本当日盈亏
+                    if day_pnl is None:
+                        day_pnl = _json_day_pnl.get(str(p.get("symbol") or "").strip())
                     positions.append(
                         {
                             "account": acc_name,
@@ -1980,8 +1997,10 @@ class ThsSyncService:
             export["positions"] = positions
             # overview.day_pnl/day_pnl_pct 改为从当前 positions 实时加总（响应内自洽）。
             # 快照聚合值可能来自早前保存的快照（盘中价变化会导致与 positions 不同步）。
+            # 仅当逐票当日盈亏齐全（含导出快照 JSON 兜底）时覆盖；全缺时保留快照聚合值。
             _d_sum = round(sum(float(p.get("day_pnl") or 0) for p in positions), 2)
-            if _d_sum or positions:
+            _pnl_count = sum(1 for p in positions if p.get("day_pnl") is not None)
+            if positions and _pnl_count == len(positions):
                 export["overview"]["day_pnl"] = _d_sum
                 # 分母：昨收市值 = Σ(昨收价 × 数量)
                 _prev_mv = 0.0

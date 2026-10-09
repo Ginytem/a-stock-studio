@@ -1661,12 +1661,12 @@ class PortfolioService:
         cost_method: str,
         snapshot: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """重放现金失真兜底：重放现金与最近正常快照（非 equity_only）差异过大时，
-        沿用最近正常快照现金，并同步重算 equity = cash + market_value。
+        """现金以快照为准：存在正常快照（非 equity_only）时，其 total_cash 为权威值
+        （由同步写入 = 账本接口现金），重放现金一律以快照现金覆盖，并重算 equity = cash + mv。
 
-        原因：交易流水按窗口覆盖（历史买卖缺失）、出入金未入账时，从零重放的现金
-        会严重失真（典型如巨额负数），写回日快照会造成曲线断崖与汇总现金错误。
-        正常场景（当天有真实交易）重放现金与快照现金差异很小，不会触发兜底。
+        原因：交易流水按窗口覆盖（历史买卖缺失，trades 表仅存同步占位买入）、出入金
+        未入账时，从零重放的现金必然失真（典型如巨额负数）。快照现金 = 同步时刻账本
+        接口现金（money_remain 加总，含逆回购应计利息），与券商同源，对账差额归零。
         """
         replayed_cash = float(snapshot.get("total_cash") or 0.0)
         mv = float(snapshot.get("total_market_value") or 0.0)
@@ -1689,7 +1689,7 @@ class PortfolioService:
             if snap is None:
                 return snapshot
             prev_cash = float(snap.total_cash or 0.0)
-            if prev_cash > 0 and abs(replayed_cash - prev_cash) > 1000.0:
+            if prev_cash > 0:
                 fallback_cash = prev_cash
                 fallback_equity = fallback_cash + mv
                 snapshot["total_cash"] = fallback_cash

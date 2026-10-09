@@ -1197,13 +1197,13 @@ class ThsSyncService:
         return {"rebuilt": rebuilt, "errors": errors[:10]}
 
     def _reconcile_cash(self, account_id: int, target_cash: float) -> Dict[str, Any]:
-        """校正账户现金使其等于账本现金（幂等：先删旧校正记录再补差额）。
+        """把账本接口现金直接写入当天正常快照（幂等），不再写现金校正记录。
 
-        现金口径：以「最近一次正常快照」的 total_cash 为当前现金（持仓同步写入，
-        口径 = 账本接口现金）。资产曲线写入的 equity_only 快照（cash=0、mv=权益点）
-        不参与比较，避免把总资产曲线点误当现金、或把正常快照现金误清零。
+        现金权威口径：同步时刻账本接口 money_remain 加总（含逆回购应计利息）。
+        快照现金与账本同源后，读取侧（_with_snapshot_cash_fallback）以最近正常
+        快照现金为准，重放/校正不再产生差异，对账差额归零。
         """
-        # 1. 删除历史 ths现金 校正记录
+        # 1. 删除历史 ths现金 校正记录（旧机制残留，清理后不再新增）
         deleted = 0
         page = 1
         while True:
@@ -1225,51 +1225,56 @@ class ThsSyncService:
             if page * 100 >= page_result.get("total", 0):
                 break
             page += 1
-        # 2. 当前现金：最近「非 equity_only」快照的 total_cash（持仓同步写入）
-        current_cash: Optional[float] = None
+        # 2. 确保当天存在正常持仓快照（当天页面未访问过时由同步生成，再写入账本现金）
+        today = date.today()
+        try:
+            with self.repo.db.get_session() as session:
+                existing = session.execute(
+                    select(PortfolioDailySnapshot.id)
+                    .where(
+                        PortfolioDailySnapshot.account_id == account_id,
+                        PortfolioDailySnapshot.snapshot_date == today,
+                        PortfolioDailySnapshot.payload.notlike("%equity_only%"),
+                    )
+                    .limit(1)
+                ).scalar_one_or_none()
+            if existing is None:
+                try:
+                    self.portfolio_service.get_portfolio_snapshot(
+                        account_id=account_id, include_realtime=False
+                    )
+                except Exception:  # noqa: BLE001 - 生成失败时跳过写入，下次读取自动兜底
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+        # 3. 把账本现金写入当天正常快照（total_equity = cash + mv 保持等值）
+        updated = 0
         try:
             with self.repo.db.get_session() as session:
                 snap = session.execute(
                     select(PortfolioDailySnapshot)
                     .where(
                         PortfolioDailySnapshot.account_id == account_id,
-                        PortfolioDailySnapshot.snapshot_date <= date.today(),
+                        PortfolioDailySnapshot.snapshot_date == today,
                         PortfolioDailySnapshot.payload.notlike("%equity_only%"),
                     )
-                    .order_by(
-                        PortfolioDailySnapshot.snapshot_date.desc(),
-                        PortfolioDailySnapshot.id.desc(),
-                    )
+                    .order_by(PortfolioDailySnapshot.id.desc())
                     .limit(1)
                 ).scalar_one_or_none()
                 if snap is not None:
-                    current_cash = float(snap.total_cash or 0)
+                    mv = float(snap.total_market_value or 0)
+                    snap.total_cash = round(target_cash, 6)
+                    snap.total_equity = round(target_cash + mv, 6)
+                    session.add(snap)
+                    session.commit()
+                    updated = 1
         except Exception:  # noqa: BLE001
-            current_cash = None
-        if current_cash is None:
-            return {
-                "adjusted": False,
-                "skipped": True,
-                "note": "无正常快照，跳过现金校正",
-                "deleted_old": deleted,
-            }
-        diff = target_cash - current_cash
-        if abs(diff) < 1.0:
-            return {"adjusted": False, "current_cash": round(current_cash, 2), "deleted_old": deleted}
-        direction = "in" if diff > 0 else "out"
-        self.portfolio_service.record_cash_ledger(
-            account_id=account_id,
-            event_date=date.today(),
-            direction=direction,
-            amount=round(abs(diff), 2),
-            note="ths现金校正",
-        )
+            pass
         return {
-            "adjusted": True,
-            "direction": direction,
-            "amount": round(abs(diff), 2),
-            "current_cash": round(current_cash, 2),
+            "adjusted": bool(updated),
+            "target_cash": round(target_cash, 2),
             "deleted_old": deleted,
+            "note": "现金口径：同步写入当天快照 = 账本接口现金（不再写校正记录）",
         }
 
     def _import_asset_trend(self, account_id: int, points: List[Dict[str, Any]]) -> int:
@@ -1908,8 +1913,8 @@ class ThsSyncService:
                     "fee_total/tax_total = 导入流水费用列与股息个税合计（4,751.27/1,424.41）。"
                     "月度/年度收益率 = Modified Dietz（剔除出入金）+ 月度复合；equity_curve.return_pct 为 TWR（剔出入金），"
                     "simple_return_pct 为起止点简单环比（含出入金），两者口径不同。"
-                    "total_cash 为接口 money_remain 加总（40,137.59），券商 App 可用资金 40,136.27，"
-                    "差 1.32 = 接口资金余额含逆回购应计利息（9-29 有 4 万 GC001），属上游口径差，非本地计算误差。"
+                    "total_cash = 同步时刻账本接口 money_remain 加总（含逆回购应计利息，与券商 App 可用资金差约 1.32 属上游口径差）；"
+                    "现金以最近同步快照为准，不做本地重放/校正。"
                     "equity_only 快照日（无持仓/现金拆分）total_market_value/total_cash 输出 null。"
                 ),
             }

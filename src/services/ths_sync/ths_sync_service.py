@@ -563,6 +563,25 @@ class ThsSyncService:
             return None
         return round((end_equity - begin_equity - cf_total) / denom * 100, 2)
 
+    @staticmethod
+    def _trade_days_between(d1: date, d2: date) -> int:
+        """d1..d2 之间的真实 A 股交易日数（含起止日，扣周末与法定节假日）。
+
+        使用 exchange-calendars 上交所 XSHG 日历；库缺失时回退为自然天。
+        """
+        try:
+            import exchange_calendars as xcals  # noqa: PLC0415
+            cal = xcals.get_calendar("XSHG")
+            n = 0
+            cur = d1
+            while cur <= d2:
+                if cal.is_session(cur):
+                    n += 1
+                cur += timedelta(days=1)
+            return n
+        except Exception:  # noqa: BLE001
+            return max((d2 - d1).days, 0)
+
     def build_statement(self, *, month: str, account_id: Optional[int] = None, cost_method: str = "fifo") -> Dict[str, Any]:
         """从账本实时拉取指定月份的全部交易（含国债逆回购等），聚合生成月度对账单。
 
@@ -1983,6 +2002,11 @@ class ThsSyncService:
                     export["overview"]["tax_total"] = round(tax_total_import, 2)
                 except Exception:  # noqa: BLE001
                     per_symbol = {}
+            # 持仓天数（交易日口径）：与对账单「个股流水」一致，取同花顺账本 hold_days
+            try:
+                ledger_hold_days = {s["symbol"]: s["hold_days"] for s in self.holding_ledger().get("stocks", [])}
+            except Exception:  # noqa: BLE001
+                ledger_hold_days = {}
             for p in positions:
                 code = str(p.get("code") or "").strip()
                 agg = per_symbol.get(code)
@@ -1997,10 +2021,15 @@ class ThsSyncService:
                     p["cum_sell"] = round(agg["sell"], 2)
                     p["cum_dividend"] = round(agg["div"], 2)
                     p["net_sunk_cost"] = round(agg["buy"] - agg["sell"] - agg["div"], 2)
-                    if agg["first"]:
+                    # 持仓天数：优先同花顺账本值（交易日口径，与对账单「个股流水」一致）；
+                    # 登录态缺失/值为 0 时回退本地真实交易日（从最早记录日起，含起止日）
+                    ledger_day = ledger_hold_days.get(code)
+                    if ledger_day:
+                        p["hold_days"] = int(ledger_day)
+                    elif agg["first"]:
                         try:
                             first_d = date.fromisoformat(agg["first"])
-                            p["hold_days"] = max((today - first_d).days, 0)
+                            p["hold_days"] = self._trade_days_between(first_d, today)
                         except ValueError:
                             p["hold_days"] = None
                     else:

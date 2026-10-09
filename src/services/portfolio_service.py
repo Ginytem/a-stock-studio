@@ -1556,7 +1556,10 @@ class PortfolioService:
             lookback_days=int(days),
         )
         series: List[Dict[str, Any]] = []
-        peak: Optional[float] = None
+        # 最大回撤基于 TWR 净值序列（剔除出入金）：
+        # 净值从 1.0 起，每日 nav *= (1 + 当日收益率)；入金推高的权益峰值不再影响回撤。
+        nav = 1.0
+        peak_nav = 1.0
         max_dd = 0.0
         first_eq: Optional[float] = None
         last_eq: Optional[float] = None
@@ -1583,6 +1586,7 @@ class PortfolioService:
             eq = float(r.total_equity or 0)
             mv = float(r.total_market_value or 0)
             cash = float(r.total_cash or 0)
+            dd = 0.0  # 首个快照日无上日权益，回撤为 0
             equity_only = False
             try:
                 payload = json.loads(r.payload) if r.payload else {}
@@ -1593,11 +1597,6 @@ class PortfolioService:
             # 未命中=当日无出入金，cf=0 正确）。不读快照 payload（同步器可能写入错误的 0）。
             _d = r.snapshot_date.isoformat()
             cf = daily_cf_map.get(_d, 0.0)
-            if peak is None or eq > peak:
-                peak = eq
-            dd = (eq - peak) / peak * 100 if peak else 0.0
-            if dd < max_dd:
-                max_dd = dd
             if first_eq is None:
                 first_eq = eq
             last_eq = eq
@@ -1606,6 +1605,12 @@ class PortfolioService:
             if prev_eq is not None and prev_eq != 0:
                 period_ret = (eq - prev_eq - cf) / prev_eq
                 cum_ret *= (1 + period_ret)
+                nav *= (1 + period_ret)
+                if nav > peak_nav:
+                    peak_nav = nav
+                dd = (nav - peak_nav) / peak_nav * 100
+                if dd < max_dd:
+                    max_dd = dd
             prev_eq = eq
             # equity_only 快照（仅资产曲线，无持仓/现金拆分）：市值/现金置空，避免与正常快照混淆
             mv_out = None if equity_only else round(mv, 2)
@@ -1635,7 +1640,7 @@ class PortfolioService:
                 "return_pct": ret_pct,
                 "simple_return_pct": simple_ret_pct,  # 起止点简单环比（未剔出入金）
                 "method": "TWR（时间加权，剔除期间净出入金）" if ret_pct is not None else None,
-                "note": "equity_only 快照日（无持仓/现金拆分且缺净出入金）不参与 TWR 累加，避免把出入金算成收益；begin/end 为曲线全序列首尾点",
+                "note": "区间收益率=TWR（时间加权，剔除期间净出入金）；最大回撤基于 TWR 净值序列（入金不抬升回撤基准）；begin/end 为曲线全序列首尾点",
                 "max_drawdown_pct": round(max_dd, 2) if series else None,
                 "points": len(series),
                 # camelCase 兼容（前端契约）

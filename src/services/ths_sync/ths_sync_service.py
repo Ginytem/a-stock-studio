@@ -495,10 +495,11 @@ class ThsSyncService:
             cost = float(p.get("cost") or 0)
             if q.get("current"):
                 # 腾讯口径：持有盈亏 = 数量 × (现价 − 成本)；当日盈亏 = 数量 × (现价 − 昨收)
+                # 盈亏率输出小数（与同花顺接口原始口径、前端 fmtPct=v*100 契约一致）
                 hold_profit = round(qty * (last_price - cost), 2)
-                hold_rate = round(hold_profit / (qty * cost) * 100, 2) if cost > 0 else 0.0
+                hold_rate = round(hold_profit / (qty * cost), 4) if cost > 0 else 0.0
                 day_pnl = round(qty * (last_price - float(q.get("prev_close") or 0)), 2)
-                day_pnl_pct = round(day_pnl / (qty * float(q.get("prev_close") or 0)) * 100, 2) if float(q.get("prev_close") or 0) > 0 else 0.0
+                day_pnl_pct = round(day_pnl / (qty * float(q.get("prev_close") or 0)), 4) if float(q.get("prev_close") or 0) > 0 else 0.0
             else:
                 hold_profit = float(p.get("hold_profit") or 0)
                 hold_rate = float(p.get("hold_rate") or 0)

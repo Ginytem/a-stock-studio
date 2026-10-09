@@ -120,6 +120,7 @@ export type ThsHoldingLedgerItem = {
   holdProfit: number;
   holdRate: number;
   holdDays: number;
+  holdDaysNatural: number;
   dayPnl: number;
   dayPnlPct: number;
   buyCount: number;

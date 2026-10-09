@@ -279,6 +279,7 @@ export function HoldingLedgerTable({
                   <th className="px-2 py-2.5 text-right font-normal">持有盈亏 / 盈亏比例</th>
                   <th className="px-2 py-2.5 text-right font-normal">成本价 / 现价</th>
                   <th className="py-2.5 pl-2 pr-3 text-right font-normal">持仓天数</th>
+                  <th className="py-2.5 pl-2 pr-3 text-right font-normal">自然天</th>
                 </tr>
               </thead>
               <tbody>
@@ -311,10 +312,13 @@ export function HoldingLedgerTable({
                         <td className="py-2 pl-2 pr-3 text-right text-foreground">
                           {st.holdDays > 0 ? `${st.holdDays} 天` : '--'}
                         </td>
+                        <td className="py-2 pl-2 pr-3 text-right text-muted-text">
+                          {st.holdDaysNatural > 0 ? `${st.holdDaysNatural} 天` : '--'}
+                        </td>
                       </tr>
                       {isOpen ? (
                         <tr className="border-b border-border/60 bg-muted/20">
-                          <td colSpan={7} className="px-3 py-3">
+                          <td colSpan={8} className="px-3 py-3">
                             <LedgerDetail st={st} />
                           </td>
                         </tr>
@@ -354,6 +358,7 @@ export function HoldingLedgerTable({
                   </div>
                   <div className="text-right text-muted-text">
                     持仓 <span className="text-foreground">{st.holdDays > 0 ? `${st.holdDays} 天` : '--'}</span>
+                    {st.holdDaysNatural > 0 ? <span className="ml-1 text-xs text-muted-text/70">自然 {st.holdDaysNatural} 天</span> : null}
                   </div>
                   <div className="col-span-2 text-muted-text">
                     持有盈亏{' '}

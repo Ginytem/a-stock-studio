@@ -505,6 +505,8 @@ class ThsSyncService:
                 hold_rate = float(p.get("hold_rate") or 0)
                 day_pnl = float(p.get("day_pnl") or 0)
                 day_pnl_pct = float(p.get("day_pnl_pct") or 0)
+            _hd = int(p.get("hold_days") or 0)
+            _start_d = self._start_date_from_trade_days(date.today(), _hd) if _hd > 0 else None
             stocks.append({
                 "symbol": code,
                 "name": name,
@@ -513,7 +515,8 @@ class ThsSyncService:
                 "last_price": last_price,
                 "hold_profit": hold_profit,
                 "hold_rate": hold_rate,
-                "hold_days": int(p.get("hold_days") or 0),
+                "hold_days": _hd,
+                "hold_days_natural": (date.today() - _start_d).days if _start_d else 0,
                 "day_pnl": day_pnl,
                 "day_pnl_pct": day_pnl_pct,
                 "buy_count": buy_c, "buy_amount": round(buy_a, 2), "buy_fee": round(buy_f, 2),

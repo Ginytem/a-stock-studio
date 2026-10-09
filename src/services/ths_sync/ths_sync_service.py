@@ -582,6 +582,29 @@ class ThsSyncService:
         except Exception:  # noqa: BLE001
             return max((d2 - d1).days, 0)
 
+    @staticmethod
+    def _start_date_from_trade_days(today: date, n_trade_days: int) -> Optional[date]:
+        """从 today 往回数 n_trade_days 个真实 A 股交易日（含起点日），返回建仓起点日期。
+
+        用于由同花顺「交易日持仓天数」反推建仓日，进而计算对应的自然天口径。
+        日历缺失时返回 None（无法反推）。
+        """
+        if n_trade_days <= 0:
+            return today
+        try:
+            import exchange_calendars as xcals  # noqa: PLC0415
+            cal = xcals.get_calendar("XSHG")
+            cur = today
+            cnt = 0
+            while True:
+                if cal.is_session(cur):
+                    cnt += 1
+                    if cnt >= n_trade_days:
+                        return cur
+                cur -= timedelta(days=1)
+        except Exception:  # noqa: BLE001
+            return None
+
     def build_statement(self, *, month: str, account_id: Optional[int] = None, cost_method: str = "fifo") -> Dict[str, Any]:
         """从账本实时拉取指定月份的全部交易（含国债逆回购等），聚合生成月度对账单。
 
@@ -2021,19 +2044,27 @@ class ThsSyncService:
                     p["cum_sell"] = round(agg["sell"], 2)
                     p["cum_dividend"] = round(agg["div"], 2)
                     p["net_sunk_cost"] = round(agg["buy"] - agg["sell"] - agg["div"], 2)
-                    # 持仓天数：优先同花顺账本值（交易日口径，与对账单「个股流水」一致）；
-                    # 登录态缺失/值为 0 时回退本地真实交易日（从最早记录日起，含起止日）
+                    # 持仓天数双口径：
+                    #  - hold_days（交易日）：优先同花顺账本值（与对账单「个股流水」一致）；
+                    #    登录态缺失时回退本地真实交易日（从最早记录日起，含起止日）
+                    #  - hold_days_natural（自然天）：由交易日反推建仓日再算自然天数；
+                    #    登录态缺失时 = 最早记录日 → 今日自然天数
                     ledger_day = ledger_hold_days.get(code)
                     if ledger_day:
                         p["hold_days"] = int(ledger_day)
+                        start_d = self._start_date_from_trade_days(today, int(ledger_day))
+                        p["hold_days_natural"] = (today - start_d).days if start_d else None
                     elif agg["first"]:
                         try:
                             first_d = date.fromisoformat(agg["first"])
                             p["hold_days"] = self._trade_days_between(first_d, today)
+                            p["hold_days_natural"] = max((today - first_d).days, 0)
                         except ValueError:
                             p["hold_days"] = None
+                            p["hold_days_natural"] = None
                     else:
                         p["hold_days"] = None
+                        p["hold_days_natural"] = None
         except Exception as exc:  # noqa: BLE001
             export["overview_error"] = str(exc)[:200]
 

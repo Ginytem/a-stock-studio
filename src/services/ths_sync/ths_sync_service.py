@@ -446,6 +446,14 @@ class ThsSyncService:
             by_code.setdefault(code, []).append(r)
 
         stocks: List[Dict[str, Any]] = []
+        # 批量取腾讯实时行情（现价/昨收），失败时静默回退同花顺接口价
+        try:
+            from src.portfolio_share import _fetch_tencent_realtime_quotes
+            tencent_quotes = _fetch_tencent_realtime_quotes(
+                [str(p.get("code") or "") for p in positions if str(p.get("code") or "") and float(p.get("quantity") or 0) > 0]
+            )
+        except Exception:  # noqa: BLE001
+            tencent_quotes = {}
         for p in positions:
             code = str(p.get("code") or "")
             qty = float(p.get("quantity") or 0)
@@ -481,17 +489,32 @@ class ThsSyncService:
                         adj_c += 1; adj_a += abs(amt)
                 elif "股息个税" in cat or cat == "缴税":
                     other_f += abs(amt)
+            # 现价优先用腾讯实时行情（与持仓页/对账页市值口径一致），同花顺账本接口价兜底
+            q = tencent_quotes.get(code, {})
+            last_price = float(q.get("current") or 0) or float(p.get("price") or p.get("last_price") or 0)
+            cost = float(p.get("cost") or 0)
+            if q.get("current"):
+                # 腾讯口径：持有盈亏 = 数量 × (现价 − 成本)；当日盈亏 = 数量 × (现价 − 昨收)
+                hold_profit = round(qty * (last_price - cost), 2)
+                hold_rate = round(hold_profit / (qty * cost) * 100, 2) if cost > 0 else 0.0
+                day_pnl = round(qty * (last_price - float(q.get("prev_close") or 0)), 2)
+                day_pnl_pct = round(day_pnl / (qty * float(q.get("prev_close") or 0)) * 100, 2) if float(q.get("prev_close") or 0) > 0 else 0.0
+            else:
+                hold_profit = float(p.get("hold_profit") or 0)
+                hold_rate = float(p.get("hold_rate") or 0)
+                day_pnl = float(p.get("day_pnl") or 0)
+                day_pnl_pct = float(p.get("day_pnl_pct") or 0)
             stocks.append({
                 "symbol": code,
                 "name": name,
                 "quantity": qty,
-                "cost": float(p.get("cost") or 0),
-                "last_price": float(p.get("price") or p.get("last_price") or 0),
-                "hold_profit": float(p.get("hold_profit") or 0),
-                "hold_rate": float(p.get("hold_rate") or 0),
+                "cost": cost,
+                "last_price": last_price,
+                "hold_profit": hold_profit,
+                "hold_rate": hold_rate,
                 "hold_days": int(p.get("hold_days") or 0),
-                "day_pnl": float(p.get("day_pnl") or 0),
-                "day_pnl_pct": float(p.get("day_pnl_pct") or 0),
+                "day_pnl": day_pnl,
+                "day_pnl_pct": day_pnl_pct,
                 "buy_count": buy_c, "buy_amount": round(buy_a, 2), "buy_fee": round(buy_f, 2),
                 "sell_count": sell_c, "sell_amount": round(sell_a, 2), "sell_fee": round(sell_f, 2),
                 "dividend_count": div_c, "dividend_amount": round(div_a, 2),
